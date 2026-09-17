@@ -10,6 +10,9 @@ services:
       FIT_INPUT_DIR: /input
       FIT_OUTPUT_DIR: /output
       FIT_DB_PATH: /app/db/fitness.db
+      # AI 报告呈现训练时间所用时区（训练数据一律 UTC 存储，按此设置换算呈现）。
+      # 不设置时容器默认 UTC，本地傍晚的骑行会被 AI 读成中午。改成你的 IANA 时区名。
+      TZ: Asia/Shanghai
     volumes:
       # 必须挂载：输入 FIT 文件与输出结果
       - ./input:/input

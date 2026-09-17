@@ -873,5 +873,22 @@ if (isMain) {
     console.log(`fit-reader Web 界面: http://localhost:${PORT}`);
     if (!isAiConfigured())
       console.log("提示: 未配置 AI 密钥（设置页可配），AI 报告将退化为复制提示词模式");
+    logTimezoneHint();
   });
+}
+
+/**
+ * 启动时打印服务器时区：AI 报告中的训练时间按「服务器本地时区」呈现
+ * （数据一律 UTC 存储），容器默认 UTC 时会整体偏移，需用 TZ 环境变量修正。
+ */
+function logTimezoneHint() {
+  const tzMin = -new Date().getTimezoneOffset();
+  const pad = (n) => String(n).padStart(2, "0");
+  const offset = `UTC${tzMin >= 0 ? "+" : "-"}${pad(Math.floor(Math.abs(tzMin) / 60))}:${pad(Math.abs(tzMin) % 60)}`;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  console.log(`服务器时区: ${zone}（${offset}）——AI 报告/对话中的时间按此时区呈现`);
+  if (tzMin === 0)
+    console.log(
+      "提示: 当前时区为 UTC。若与你所在地不符，请为容器设置 TZ 环境变量（如 TZ=Asia/Shanghai）并重启，否则 AI 会按 UTC 解读训练时段。",
+    );
 }

@@ -88,7 +88,7 @@ node index.js input/MAGENE_C506SE_2026-07-17_202219_1273797.fit output/
 ## 版本控制约定（重要）
 
 - 项目使用 **git** 进行版本控制。**每次完成修改后（无论是代码、配置还是文档变更）都必须先提升 `package.json` 中的 `version` 字段，再执行 `git commit`**，并附上清晰描述本次变更内容的中文 commit message。
-- 当前版本：`1.9.1`。版本号遵循语义化版本（SemVer）：`MAJOR.MINOR.PATCH`，bug 修复/小调整升 PATCH，新增功能升 MINOR，破坏性改动升 MAJOR。
+- 当前版本：`1.9.5`。版本号遵循语义化版本（SemVer）：`MAJOR.MINOR.PATCH`，bug 修复/小调整升 PATCH，新增功能升 MINOR，破坏性改动升 MAJOR。
 - 推荐工作流：
   1. 完成修改并跑通 `npm test`。
   2. 运行 `npm version patch|minor|major --no-git-tag-version`（仅修改 `package.json` 与 `package-lock.json`，不自动提交、不打 tag）。
@@ -167,4 +167,4 @@ summary.json 字段（喂 AI 的汇总结构，records.csv 列见上文「项目
 ## 安全考虑
 
 - 仅读取本地文件；唯一的网络访问是 AI 报告/对话调用用户自配的 OpenAI 兼容接口（agentic 工具全部本地执行，无新增外发通道）；FIT 文件视为不可信输入，解析器以 `force: true` 容错运行。
-- AI 密钥存本地训练库 settings 表（`db/` 已被 `.gitignore` 排除），仅随 AI 请求发往用户配置的接口地址；无其它密钥或环境变量配置（`FIT_DB_PATH` / `FIT_INPUT_DIR` / `FIT_OUTPUT_DIR` / `PORT` 仅为部署/测试隔离参数）。
+- AI 密钥存本地训练库 settings 表（`db/` 已被 `.gitignore` 排除），仅随 AI 请求发往用户配置的接口地址；无其它密钥或环境变量配置（`FIT_DB_PATH` / `FIT_INPUT_DIR` / `FIT_OUTPUT_DIR` / `PORT` 仅为部署/测试隔离参数；`TZ` 为部署时区——数据一律 UTC 存储，AI 呈现时间按服务器本地时区换算，Docker 镜像默认 `Asia/Shanghai`，容器默认 UTC 会使训练时段整体偏移 8 小时，见 DEPLOY.md 8.5 与 server.js 启动日志的时区提示）。

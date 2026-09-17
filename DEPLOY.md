@@ -81,6 +81,7 @@ docker compose pull          # 如果镜像已推送到仓库，先拉取最新
 docker run -d \
   --name fit-reader \
   -p 3000:3000 \
+  -e TZ=Asia/Shanghai \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
@@ -93,6 +94,7 @@ Windows PowerShell 中挂载路径写法：
 docker run -d `
   --name fit-reader `
   -p 3000:3000 `
+  -e TZ=Asia/Shanghai `
   -v "${PWD}/input:/input" `
   -v "${PWD}/output:/output" `
   -v "${PWD}/db:/app/db" `
@@ -207,6 +209,17 @@ user: "1000:1000"  # 改成你的宿主机 uid:gid
 ### 8.4 我不想用 AI，只想看 Web 界面和指标
 
 设置页留空 API 密钥即可。Web 界面除了 AI 报告按钮外全部可用，AI 报告会生成提示词供你复制到其它 AI 工具。
+
+### 8.5 AI 报告把训练时间读错（傍晚的骑行被说成中午）
+
+训练数据（records.csv / summary.json / 训练库）一律按 **UTC 存储**；AI 报告与对话呈现时间时按**容器本地时区**换算。Docker 容器默认时区是 UTC，因此整体偏移（东八区差 8 小时：本地 19:51 的骑行在数据里是 `11:51Z`，AI 会读成「中午」）。
+
+镜像与 `docker-compose.yml` 默认已设 `TZ=Asia/Shanghai`。若你不在该时区：
+
+- compose 方式：修改 `docker-compose.yml` 里的 `TZ` 环境变量（IANA 时区名，如 `Europe/Berlin`），然后 `docker compose up -d --force-recreate` 重建容器；
+- docker run 方式：加 `-e TZ=你的时区`。
+
+确认方法：`docker compose logs` 的启动日志会打印「服务器时区: …（UTC+XX:XX）」；若显示 UTC 且与你所在地不符，日志会额外给出一行设置提示。修改 TZ 后需**重新生成** AI 报告 / 开新对话——历史报告与对话记录保持生成时的内容，不会自动改写。
 
 ---
 
