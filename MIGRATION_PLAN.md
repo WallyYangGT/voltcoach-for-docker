@@ -1,6 +1,6 @@
 # fit-reader 安卓移植改造计划
 
-> 2026-09-17 制定，2026-09-17 更新（新增 §4 UI/UX 重构）。目标：把 Docker/Web 版 fit-reader 改造为**纯本地安卓 App**，功能对齐现有 Web 版、UI 按 Material 3 移动优先重构，AI 继续 BYOK，不架设任何服务器。本文档是规划成果，不涉及实现。
+> 2026-09-17 制定，2026-09-17 更新（新增 §4 UI/UX 重构；改为双 repo 并行维护并新增 §8.2 构建与分发）。目标：把 Docker/Web 版 fit-reader 改造为**纯本地安卓 App**，功能对齐现有 Web 版、UI 按 Material 3 移动优先重构，AI 继续 BYOK，不架设任何服务器。本文档是规划成果，不涉及实现。
 
 ---
 
@@ -15,7 +15,8 @@
 | 数据库 | `expo-sqlite`（可开 SQLCipher 加密），schema 从现有 `src/db.js` 平移 |
 | AI | BYOK 不变；API Key 从明文 SQLite 改存 `expo-secure-store`（Android Keystore）；SSE 流式用 `expo/fetch`，兜底 `react-native-sse`，再兜底非流式（与现版默认行为一致） |
 | 长期数据 | 主方案：**应用内「导出/导入备份包」**（`.fitbackup` = zip：db 副本 + records 文件 + manifest），经系统 SAF/分享面板落到用户自选位置（Downloads/网盘/换机）；辅助：Android Auto Backup 兜底（国内 ROM 无 GMS 基本无效，不指望） |
-| Repo 策略 | **新建 repo 重新开始**，旧 repo 冻结为 reference；一次性在旧 repo 增加 `--export` 命令产出迁移包，把现有 `db/fitness.db` 历史带进 App |
+| Repo 策略 | **新建 repo（fit-reader-app），与旧 repo 并行长期维护**（Docker/Web 版不停更，口径同步约定见 §8.1）；旧 repo 增加 `--export` 命令产出迁移包，把现有 `db/fitness.db` 历史带进 App |
+| 发布方式 | **GitHub Actions 云端打包 APK → GitHub Release**（与 Docker image 走 CI 同一心智，无需本地打包，见 §8.2） |
 | 去掉的功能 | CLI 批量 analysis、`--monthly`/`--trend`、四个 CLI 提示词命令、`server.js` 与 `web/`、Docker 部署 |
 
 ---
@@ -227,7 +228,7 @@ records/             # 每活动一个 gzip 压缩的逐秒数据（从 CSV 改�
 
 ### 7.3 从 Docker 版带走历史数据
 
-旧 repo 终止维护前加**一次性命令** `node index.js --export [输出目录]`：
+旧 repo 增加命令 `node index.js --export [输出目录]`：
 
 - 打包 `db/fitness.db` + `output/*.records.csv`（转 gzip 进 records/）+ manifest（schema_version 与现库一致）
 - App 端「我的 → 数据管理 → 导入」消费同一格式 → 现有 CTL/ATL 历史、AI 记忆、分类备注全部无缝迁移
@@ -239,40 +240,53 @@ records/             # 每活动一个 gzip 压缩的逐秒数据（从 CSV 改�
 
 ### 8.1 Repo 策略
 
-**新建 repo（建议名 `fit-reader-app`），从零开始；旧 repo 冻结为 reference。**
+**新建 repo（建议名 `fit-reader-app`），与旧 repo **并行长期维护**——Docker/Web 版不停止维护，两版并存。**
 
-- 理由：构建体系（npm → Expo/Metro）、测试框架、目录结构全变，在旧 repo 上改会留下大量半死分支与无意义 diff 历史；而旧 repo 的 git 历史本身就是最好的参考档案（口径演进、bug 修复记录都在）。
-- 做法：`npx create-expo-app` 起骨架 → 把 `src/core`、`src/prompts`、`skills/`、`test/unit.test.mjs` 逐个**复制**过来（保留文件头注释，标注来源 commit），边搬边补 TS 类型。
-- 旧 repo 处置：完成 `--export` 命令 + README 加"已迁移至 fit-reader-app"声明后进入只修关键 bug 状态。
-- 双 repo 并行期数据互通靠 §7.3 的备份包。
+- 理由：构建体系（npm → Expo/Metro）、测试框架、目录结构完全不同，混在一个 repo 会互相干扰；各自独立演进最干净。
+- 做法：`npx create-expo-app` 起骨架 → 把 `src/core`、`src/prompts`、`skills/`、`test/unit.test.mjs` 逐个**复制**过来（保留文件头注释，标注来源 commit），边搬边补 TS 类型；两 repo 的 README 互相引用。
+- **口径同步约定（并行维护的核心纪律）**：两边共享一份算法/提示词/技能拷贝（src/core、src/prompts、skills/），口径变更（阈值调整、指标 bug 修复、提示词改进）必须双向同步。建议固定方向：**算法与提示词改动先落在旧 repo**（node:test 回归体系最成熟、可用真实数据快速验证），验证通过后同步到新 repo，同步 commit 标注来源 commit；纯 UI/平台相关改动各自独立。长期若同步成本显著，再评估抽共享 npm 包（workspace/private registry）。
+- **数据互通**：原始 `.fit` 文件是 source of truth——两版都是"导入 FIT → 衍生分析"，跨版本不需要同步衍生数据，保留好原始文件集即可在任一版本重放分析；手填数据（备注/分类/记忆/骑手参数）是唯一会分叉的部分，量小，并行期以单侧录入为主，必要时走 §7 备份包搬运。
+- 旧 repo 补 `--export` 命令（§7.3）用于把历史库导入 App。
 
-### 8.2 里程碑
+### 8.2 构建与分发（GitHub Actions → Release，类比现有 Docker 流程）
+
+**不需要本地打包。** 与 Docker image 走 GitHub Actions 一样的心智：push tag 触发 workflow → 云端构建 APK → 自动挂到 GitHub Release，手机浏览器下载即装。
+
+- **runner 环境**：GitHub 托管的 `ubuntu-latest` **预装 OpenJDK 17 与 Android SDK**，无需自配工具链。
+- **构建链**：`npm ci` → `npx expo prebuild --platform android`（生成/刷新原生 android 工程）→ `cd android && ./gradlew assembleRelease`。侧载分发出 **APK** 即可（AAB 是 Play Store 上传格式，上架时再启用）。
+- **签名**：自签名 keystore 以 base64 存 GitHub Secrets，workflow 注入（口令同走 Secrets）；个人侧载自签即可，所有版本用同一 keystore 保证覆盖安装不冲突。
+- **发布**：`gh release create`（或 `softprops/action-gh-release`）把 APK 附到 Release 页，配 changelog。
+- **成本**：公开 repo Actions 免费；私有 repo 每月 2000 Linux 分钟免费，单次 Android release 构建 10–20 分钟（gradle 缓存后更短），个人项目绰绰有余。
+- **备选**：EAS Build（Expo 官方云构建，免费额度约 30 次/月，省心但源码会上传 Expo 服务器且可能排队）；本地打包（Windows 需自装 JDK + Android SDK + gradle，环境最麻烦，不建议作主流程）。
+- **可选增强**：Expo Updates OTA 热更新（纯 JS 改动免重装 APK）——个人侧载项目建议先不启用，避免版本漂移带来的排查负担。
+
+### 8.3 里程碑
 
 | 阶段 | 内容 | 验收 | 预估 |
 |---|---|---|---|
-| **M0** | Expo 骨架、**底部四 tab 导航 + MD3 暗色主题（volt 品牌色）**、i18n 词典接入；**4 个 PoC**（见 8.3） | PoC 全过 | 0.5–1 周 |
+| **M0** | Expo 骨架、**底部四 tab 导航 + MD3 暗色主题（volt 品牌色）**、i18n 词典接入；**4 个 PoC**（见 8.4） | PoC 全过 | 0.5–1 周 |
 | **M1** | 解析管线搬运（analyzeFile 改依赖注入）+ expo-sqlite 建库 + 训练导入（FAB 流程）+ 详情页四类图表 | 真实 MAGENE 文件在 App 内跑出与 Docker 版一致的 summary（黄金 diff） | 1–2 周 |
 | **M2** | 首页仪表盘、趋势图、训练列表、「我的」设置页（骑手参数/语言/FTP 估算与应用） | 与 Web 版功能对齐 | 1 周 |
 | **M3** | AI 层：配置页（secure-store）、**AI 会话中心（四场景 Bottom Sheet 生成流 + 统一历史列表）**、会话详情追问、agentic 工具、记忆 | 对真实库生成中文报告，工具调用正常 | 1–2 周 |
 | **M4** | 备份导出/导入（§7.2）+ 旧 repo `--export` 命令 + 旧数据实机迁移 | 换机演练：旧库数据完整出现在 App | 0.5–1 周 |
-| **M5** | 打磨：图标、启动屏、错误边界、空态/加载态（MD3）、APK 构建（EAS 或本地 gradle）侧载 | 日常可用 | 0.5 周 |
+| **M5** | 打磨：图标、启动屏、错误边界、空态/加载态（MD3）、**GitHub Actions 打包流水线 + Release 发布**（§8.2） | 日常可用，tag 即发版 | 0.5 周 |
 
 单人业余时间合计约 **5–8 周**。
 
-### 8.3 M0 必须先做的 4 个 PoC（风险前置）
+### 8.4 M0 必须先做的 4 个 PoC（风险前置）
 
 1. **fit-parser PoC**：Expo 项目里 `import FitParser from "fit-file-parser"`，`expo-file-system` 读真实 `.fit` 字节传入解析。buffer polyfill 是它自带依赖、无 Node 内置引用，理论可行，但 Metro/Hermes 下未实测过。**不过则 fork 修或换 dist 路径，此为全计划最大单点风险。**
 2. **SVG 性能 PoC**：react-native-svg 渲染 1400 点多系列折线，真机滑动帧率。
 3. **SSE PoC**：expo/fetch 对用户 Kimi 接口流式读 chat/completions。
 4. **SQLite 兼容 PoC**：把现有 `db/fitness.db` 直接 push 到设备用 expo-sqlite 打开查询——顺便验证 §7 迁移路径可行性（node:sqlite 与 expo-sqlite 都是标准 SQLite，理论无障碍）。
 
-### 8.4 测试策略
+### 8.5 测试策略
 
 - **黄金数据集**：在旧 repo 用 `input/` 真实 FIT 跑出 summary.json 存入新 repo `fixtures/`；新端分析同一文件后 diff 关键指标（NP/TSS/峰功率/anomalies/pause_seconds），毫位级一致才算搬运合格。这是防"重写走样"的核心手段。
 - 纯函数单测（现 `test/unit.test.mjs` 覆盖的 NP/peakAvg/间歇/爬升/漂移/ftp/planning/prompts）原样搬，node:test 继续跑（算法层不 import RN）。
 - db 层测试：expo-sqlite 内存库 + 现有 web.test.mjs 的场景断言改写。
 
-### 8.5 风险清单
+### 8.6 风险清单
 
 | 风险 | 概率 | 影响 | 缓解 |
 |---|---|---|---|
@@ -280,7 +294,7 @@ records/             # 每活动一个 gzip 压缩的逐秒数据（从 CSV 改�
 | react-native-svg 大数据卡顿 | 低 | 中 | ≤1400 抽稀；兜底 Skia |
 | expo/fetch 流式在部分国产 ROM 网络栈异常 | 低 | 低 | react-native-sse 兜底；最终兜底非流式（现版本默认即非流式） |
 | schema 演进破坏旧备份导入 | 中 | 中 | user_version 迁移链 + 每次升级用真实备份回归导入测试 |
-| 单人双 repo 维护分心 | 中 | 低 | 旧 repo 冻结策略，只修 P0 |
+| 双 repo 并行维护的口径同步遗漏 | 中 | 中 | 固定"算法/提示词改动先落旧 repo、验证后单向同步新 repo"纪律 + 同步 commit 标注来源；FIT 原始文件为 source of truth，衍生数据可随时重放 |
 
 ---
 
