@@ -164,6 +164,26 @@ export function hrDriftPct(records, field = "power") {
   return Math.round(((e1 - e2) / e1) * 1000) / 10;
 }
 
+/**
+ * 修复被截断的 FIT 头：把 data_size（头内 offset 4..8，uint32 LE）改写为实际可用字节数。
+ * fit-file-parser v5 起始终校验结构边界——头声明长度超过实际字节数时直接报错
+ * "File data exceeds input length"，不再像 v3 那样静默按 EOF 截断；未传完/损坏的文件
+ * 因此会从「出部分结果 + 缺失计数」退化为整个解析失败。数据本身一个字节都不改，
+ * 只让头声明与实际长度自洽即可恢复旧行为（恢复出的记录数与 v3 截断口径一致）。
+ * 声明值与实际相符（无需修复）时返回 null。
+ */
+export function patchTruncatedFitHeader(content) {
+  if (!Buffer.isBuffer(content) || content.length < 12) return null;
+  const headerSize = content[0];
+  if (headerSize < 12 || headerSize > content.length) return null;
+  const declared = content.readUInt32LE(4);
+  const available = content.length - headerSize;
+  if (declared <= available) return null;
+  const patched = Buffer.from(content);
+  patched.writeUInt32LE(available, 4);
+  return patched;
+}
+
 /** 检测整条记录（所有字段均为 null，即该秒没有任何数据）连续缺失 ≥ minSec 的片段 */
 export function findMissingSpans(records, minSec) {
   const spans = [];
@@ -604,16 +624,30 @@ export async function analyzeFile(input, outDir) {
   // 骑手参数以训练库为准（Web 设置页维护）；库中无配置时保持 settings.js 默认值
   syncAthleteFromDb();
   const content = fs.readFileSync(input);
-  const parser = new FitParser({
+  const parserOpts = {
     force: true,
     speedUnit: "km/h",
     lengthUnit: "km",
     mode: "list",
-  });
+  };
+  const parse = (buf) =>
+    new Promise((resolve, reject) =>
+      new FitParser(parserOpts).parse(buf, (err, d) => (err ? reject(err) : resolve(d))),
+    );
 
-  const data = await new Promise((resolve, reject) =>
-    parser.parse(content, (err, d) => (err ? reject(err) : resolve(d))),
-  );
+  let data;
+  try {
+    data = await parse(content);
+  } catch (err) {
+    // v5 结构校验更严：截断文件直接报错，改写头声明后重试以保持「损坏文件仍出部分结果」的旧行为
+    const patched = patchTruncatedFitHeader(content);
+    if (!patched) throw err;
+    try {
+      data = await parse(patched);
+    } catch {
+      throw err; // 修复后仍失败，报原始错误（更贴近用户手上这个文件）
+    }
+  }
 
   const sport = data.sport?.sport || data.sessions?.[0]?.sport || "unknown";
 

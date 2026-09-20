@@ -19,6 +19,7 @@ import {
   detectIntervals,
   hrDriftPct,
   collectDeveloperFields,
+  patchTruncatedFitHeader,
 } from "../index.js";
 import { estimateFtpFromHistory } from "../src/ftp.js";
 import {
@@ -195,6 +196,48 @@ test("findMissingSpans: 整条记录（全字段 null）缺失检测", () => {
   assert.equal(spans[0].duration_sec, 15);
   // 阈值大于缺失时长则不报告
   assert.equal(findMissingSpans(records, 20).length, 0);
+});
+
+// 构造一个最小 FIT 头：headerSize + protocol + profile + data_size(uint32 LE) + ".FIT"
+function fitHeader(dataSize, headerSize = 14) {
+  const buf = Buffer.alloc(headerSize);
+  buf[0] = headerSize;
+  buf[1] = 0x10;
+  buf.writeUInt16LE(2140, 2);
+  buf.writeUInt32LE(dataSize, 4);
+  buf.write(".FIT", 8, "ascii");
+  return buf;
+}
+
+test("patchTruncatedFitHeader: 头声明长度超过实际字节数时改写为可用长度", () => {
+  const content = Buffer.concat([fitHeader(1000), Buffer.alloc(500)]);
+  const patched = patchTruncatedFitHeader(content);
+  assert.ok(patched, "应返回修复后的 Buffer");
+  assert.equal(patched.readUInt32LE(4), 500); // 可用字节 = 500
+  assert.equal(patched.length, content.length); // 数据长度不变
+  // 头之外的数据一个字节都不改
+  assert.deepEqual(patched.subarray(14), content.subarray(14));
+  // 不改动入参
+  assert.equal(content.readUInt32LE(4), 1000);
+});
+
+test("patchTruncatedFitHeader: 头声明与实际相符或更小时返回 null", () => {
+  assert.equal(patchTruncatedFitHeader(Buffer.concat([fitHeader(500), Buffer.alloc(500)])), null);
+  assert.equal(patchTruncatedFitHeader(Buffer.concat([fitHeader(100), Buffer.alloc(500)])), null);
+});
+
+test("patchTruncatedFitHeader: 非法输入安全返回 null", () => {
+  assert.equal(patchTruncatedFitHeader(Buffer.alloc(5)), null); // 比头还短
+  assert.equal(patchTruncatedFitHeader(Buffer.concat([fitHeader(999, 8), Buffer.alloc(100)])), null); // 头长度非法
+  const truncatedHeader = fitHeader(999, 14).subarray(0, 13); // 头本身被截断
+  assert.equal(patchTruncatedFitHeader(truncatedHeader), null);
+  assert.equal(patchTruncatedFitHeader("not a buffer"), null);
+});
+
+test("patchTruncatedFitHeader: 非 14 字节头（12 字节）同样按头长换算可用字节", () => {
+  const content = Buffer.concat([fitHeader(1000, 12), Buffer.alloc(300)]);
+  const patched = patchTruncatedFitHeader(content);
+  assert.equal(patched.readUInt32LE(4), 300);
 });
 
 test("estimateFtp: 20 分钟峰功率 × 0.95，并给出更新建议", () => {

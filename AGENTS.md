@@ -14,7 +14,7 @@
 ## 技术栈与运行方式
 
 - **运行时**：Node.js（已在 v22.20.0 上验证），**ESM（ECMAScript Modules）**（`package.json` 中 `"type": "module"`，源码使用 `import`/`export` 语法），零构建、零转译。
-- **依赖**：`fit-file-parser`（解析 `.fit`）、`marked`（AI 报告 Markdown 转 HTML）与 `dayjs`（AI 提示词当前日期/星期/时区格式化），均通过 `npm install` 安装。
+- **依赖**：`fit-file-parser`（解析 `.fit`，当前 `^5.2.1`，**要求 Node ≥ 20**）、`marked`（AI 报告 Markdown 转 HTML）与 `dayjs`（AI 提示词当前日期/星期/时区格式化），均通过 `npm install` 安装。
 - **关键配置**：`package.json`（`main: index.js`，脚本 `npm test` 运行 node:test 回归测试，`npm run analysis` 批量分析+趋势图）。
 
 ### 命令
@@ -76,9 +76,9 @@ node index.js input/MAGENE_C506SE_2026-07-17_202219_1273797.fit output/
 
 | 区块 | 内容 |
 |---|---|
-| 工具函数 | `zoneOf` / `zoneDistribution`（区间分布）、`normalizedPower`（30s 滚动平均的四次方均根，缺口窗口不参与）、`peakAvg`（指定时长最大平均功率，要求窗口连续）、`fillShortGaps`（≤阈值短缺口线性插值，峰功率曲线/FTP 估算前预处理）、`hrDriftPct`（前后半程效率因子相对变化，功率或速度口径）、`findPowerGaps`（功率缺失 > 60s 检测）、`findMissingSpans`（整段记录缺失检测）、`detectPauseSpans`（计时暂停识别：FIT timer 事件区间 / 设备累计距离冻结 / 恢复侧静止三级判据，阈值见 `DATA_QUALITY`）、`collectDeveloperFields`（非标准字段数值统计）、`elevationGain`（滞回去抖的累计爬升：以最近确认点为基线，累计上升达阈值才计入，亚米级气压抖动不计数）、`avgField` / `maxField`（片段统计）。纯函数均 `export`，供单元测试直接引用；`main()` 仅当作为入口脚本运行时执行 |
+| 工具函数 | `zoneOf` / `zoneDistribution`（区间分布）、`normalizedPower`（30s 滚动平均的四次方均根，缺口窗口不参与）、`peakAvg`（指定时长最大平均功率，要求窗口连续）、`fillShortGaps`（≤阈值短缺口线性插值，峰功率曲线/FTP 估算前预处理）、`hrDriftPct`（前后半程效率因子相对变化，功率或速度口径）、`findPowerGaps`（功率缺失 > 60s 检测）、`findMissingSpans`（整段记录缺失检测）、`detectPauseSpans`（计时暂停识别：FIT timer 事件区间 / 设备累计距离冻结 / 恢复侧静止三级判据，阈值见 `DATA_QUALITY`）、`patchTruncatedFitHeader`（截断 FIT 头修复：头声明 `data_size` 超过实际字节数时改写为可用长度，用于 v5 结构校验下的损坏文件兜底）、`collectDeveloperFields`（非标准字段数值统计）、`elevationGain`（滞回去抖的累计爬升：以最近确认点为基线，累计上升达阈值才计入，亚米级气压抖动不计数）、`avgField` / `maxField`（片段统计）。纯函数均 `export`，供单元测试直接引用；`main()` 仅当作为入口脚本运行时执行 |
 | P0 分析函数 | `estimateFtp`（20min 峰功率 × 0.95 估算 FTP 并给更新建议）、`detectIntervals`（≥105% FTP 过阈段识别 + 间歇组统计）、`detectClimbs`（30s 窗口坡度 ≥3% 的爬坡段提取）、`cadencePowerAnalysis`（发力时段踏频习惯与踏频-功率相关性） |
-| 单文件流程 `analyzeFile()` | ① 解析 FIT（`force: true`, `km/h`, `km`, `mode: "list"`；注意解析器会把海拔/爬升缩放成 km，代码统一换回米）→ ② 按秒重采样记录（缺口置 `null`，统计无时间戳丢弃数/缺失秒数；间隙经 `detectPauseSpans` 分类为计时暂停或数据缺失，暂停不计入时长/缺失）→ ③ 写 CSV → ④ 计算指标（含 P0 分析；跑步附加配速段、游泳解析 length 消息、无功率数据时省略 power 段并切换心率漂移为速度口径；**anomalies 输出为结构化对象**、踏频发力习惯输出 `style` 枚举）→ ⑤ 训练库入库 + `athlete_context` 注入当日 CTL/ATL/TSB 与 `form_state`（失败仅警告不中断）→ ⑥ 写 summary JSON，返回结果 |
+| 单文件流程 `analyzeFile()` | ① 解析 FIT（`force: true`, `km/h`, `km`, `mode: "list"`；注意解析器会把海拔/爬升缩放成 km，代码统一换回米；首次解析失败时若头声明长度超过实际字节数，则经 `patchTruncatedFitHeader()` 改写头声明重试一次，修复后仍失败抛原始错误——保持「截断/损坏文件仍出部分结果」的旧行为）→ ② 按秒重采样记录（缺口置 `null`，统计无时间戳丢弃数/缺失秒数；间隙经 `detectPauseSpans` 分类为计时暂停或数据缺失，暂停不计入时长/缺失）→ ③ 写 CSV → ④ 计算指标（含 P0 分析；跑步附加配速段、游泳解析 length 消息、无功率数据时省略 power 段并切换心率漂移为速度口径；**anomalies 输出为结构化对象**、踏频发力习惯输出 `style` 枚举）→ ⑤ 训练库入库 + `athlete_context` 注入当日 CTL/ATL/TSB 与 `form_state`（失败仅警告不中断）→ ⑥ 写 summary JSON，返回结果 |
 | 查询命令 | `printMonthly()`（逐月汇总表）、`writeTrendHtml()`（自包含 HTML 趋势图：月 TSS 柱 + CTL/ATL/TSB 月末折线 + 指标解读脚注，原生 SVG 无外部库） |
 | 提示词命令（P2） | `emitPrompt()`（打印 stdout + 可选写 .md）、`loadSummaryJson()`、`emitPlanPrompt()` / `emitTaperPrompt()`（从训练库取数并调 src/prompts.js 组装）、`cliLang()` / `cliArgv()`（`--lang en` 解析：剔除标志后取位置参数，缺省读训练库 lang 再缺省 zh） |
 | 入口 `main()` | `--monthly` / `--trend` → 训练库查询；`--review` / `--plan` / `--taper` / `--compare` → 提示词生成（可带 `--lang en`）；输入是目录 → 批量模式（逐文件调用 `analyzeFile`，失败不中断）；输入是文件 → 单文件模式并打印 JSON 全文 |
@@ -147,10 +147,10 @@ summary.json 字段（喂 AI 的汇总结构，records.csv 列见上文「项目
 **自动化测试已落地**（P3）：`npm test` = `node --test "test/*.test.mjs"`，零新增依赖（Node 内置 node:test）。
 
 - `test/make_test_fit.mjs`：手写 FIT 二进制生成器（文件头/定义消息/数据消息/CRC-16），可生成骑行（含功率缺失/记录缺失/无时间戳坏记录/开发者字段）、跑步、游泳（length 消息）合成文件；也可直接 `node test/make_test_fit.mjs [目录]` 生成样例。
-- `test/unit.test.mjs`：指标算法纯函数单测（NP/peakAvg/分区/爬升去抖/间歇识别/心率漂移/FTP 估算/缺失检测/开发者字段 + src/ftp.js 历史估算：CP 模型/数据充分性/心率交叉验证各分支 + src/prompts.js 提示词数据压缩与当前日期时间段（buildDateSection 固定时刻断言）、时间戳本地化（`localizeTimestamps`：改写为本地偏移且时刻不变、用户自填内容不改写） + src/planning.js：simulateForm 衰减/收敛/两类风险触发与不触发、generateWorkout 五种模板结构/瓦数换算/TSS 口径/时长不足报错/TSB 降级）。
+- `test/unit.test.mjs`：指标算法纯函数单测（NP/peakAvg/分区/爬升去抖/间歇识别/心率漂移/FTP 估算/缺失检测/开发者字段 + src/ftp.js 历史估算：CP 模型/数据充分性/心率交叉验证各分支 + src/prompts.js 提示词数据压缩与当前日期时间段（buildDateSection 固定时刻断言）、时间戳本地化（`localizeTimestamps`：改写为本地偏移且时刻不变、用户自填内容不改写） + src/planning.js：simulateForm 衰减/收敛/两类风险触发与不触发、generateWorkout 五种模板结构/瓦数换算/TSS 口径/时长不足报错/TSB 降级 + `patchTruncatedFitHeader` 截断 FIT 头修复：改写声明为可用长度/声明自洽返回 null/非法头与超短输入安全返回 null/12 与 14 字节头换算）。
 - `test/skills.test.mjs`：src/skills.js 技能文档加载——临时目录 + `FIT_SKILLS_DIR` 隔离（loadSkills 每次调用实时读环境变量，无需 import 前设置），覆盖排序/`_` 前缀与非 .md 跳过/标题提取与文件名兜底/目录不存在/拼装格式/实时生效/内置五技能冒烟/**`.en.md` 按语言加载与 Knowledge Base 段**。
 - `test/ai.test.mjs`：src/ai.js HTTP 层回归——本地 mock chat/completions 服务，验证慢响应不被隐藏超时掐断、总超时报错、SSE 流式拼接、HTTP 错误状态透出。
-- `test/e2e.test.mjs`：端到端回归——合成 FIT → `analyzeFile` → 校验 CSV 行数与 summary 指标（anomalies 结构化断言 + formatAnomaly 中/英渲染口径 + 暂停识别/时长与 TSS 剔除暂停/码表自报爬升优先）；训练库通过 `FIT_DB_PATH` 指向临时目录与真实库隔离（**必须在 import index.js 之前设置该环境变量**，src/db.js 在模块加载时定路径）。
+- `test/e2e.test.mjs`：端到端回归——合成 FIT → `analyzeFile` → 校验 CSV 行数与 summary 指标（anomalies 结构化断言 + formatAnomaly 中/英渲染口径 + 暂停识别/时长与 TSS 剔除暂停/码表自报爬升优先；**截断文件兜底**：头声明未改写的截断文件仍解析出部分记录且指标管线跑通、头合法但数据为垃圾时抛错）；训练库通过 `FIT_DB_PATH` 指向临时目录与真实库隔离（**必须在 import index.js 之前设置该环境变量**，src/db.js 在模块加载时定路径）。
 - `test/web.test.mjs`：Web 服务端到端——合成 FIT → `POST /api/upload` → 校验概览/详情/时序/AI 提示词接口（含专业知识库段注入断言）与路径穿越防护；同时直接调用 `saveAiReport` / `listAiReports` / `getAiReport` 验证 AI 缓存表 30 条滚动限制；FTP 接口用 `upsertActivity` 注入合成骑行校验 `/api/ftp-estimate`，并校验 `/api/ftp-apply` 与 `GET/POST /api/athlete`（写训练库 settings 表、部分更新、非法值 400）；训练备注（`/api/activity/note` 保存/合并进 summary/进入复盘提示词/清除与长度校验）与用户背景目标（`/api/profile` 部分更新、清空、进入复盘与规划提示词）亦有端到端覆盖；**语言机制**（`GET/POST /api/lang` 存取与非法值 400、库中 lang=en 时提示词/技能/错误消息整体英文、请求体 lang 覆盖库值、记忆段与工具指引段按语言输出、详情接口按 X-Lang 头本地化 form_note）；AI 对话（`POST/GET/DELETE /api/ai/chat(s)`：202 异步状态机轮询、系统段与历史消息口径、report_id 找回追问对话、级联删除、每 mode 50 个滚动清理、旧 follow-up 接口 404）与 AI 记忆（saveMemory 校验/取代链/100 条滚动清理、mock AI 触发 save_memory 入库带 source、memories 接口与删除 404、报告提示词含记忆段）与 simulate_form 负荷推演（mock AI 首轮 tool_calls、projection/end_form/risk_flags 回填、工具定义随请求下发、回答落库）以 mock AI 服务端到端覆盖；同样用 `FIT_DB_PATH` / `FIT_OUTPUT_DIR` / `FIT_INPUT_DIR` 指向临时目录隔离（须在 import server.js 前设置），收尾先 `closeDb()` 释放 SQLite 句柄再删临时目录（Windows 文件锁）。
 
 修改指标算法后：① 跑 `npm test`；② 用 `input/` 下的真实 FIT 文件重跑批量分析做端到端验证；涉及训练库的改动还需验证 `--monthly` / `--trend` 与删库自动重建（`rm -rf db` 后重跑分析）。
@@ -160,8 +160,10 @@ summary.json 字段（喂 AI 的汇总结构，records.csv 列见上文「项目
 - **旧版《FIT训练分析项目README.md》已删除**（P0–P4 路线图全部落地后，仍有价值的输出格式与算法口径并入本文档「输出格式与指标算法口径」一节；面向用户的使用说明以根目录 `README.md` 为准——中文版首段附英文文档链接，英文版为 `README.en.md`，Docker 部署见 `DEPLOY.md`）。路线图完成情况：P0（批量处理、FTP 自动估算、间歇识别、爬坡段提取、踏频-功率联合分析）、P1（SQLite 训练库、CTL/ATL/TSB 写入 `athlete_context`、月汇总 `--monthly`、趋势图 `--trend`；因训练频率低，路线图的“周汇总”落地为月汇总）、P2（提示词模板库 `src/prompts.js` + 四个提示词命令 `--review`/`--plan`/`--taper`/`--compare`）、P3（跑步/游泳适配、开发者字段统计、损坏文件缺失计数、合成 FIT 生成器 + node:test 回归测试）、P4（AI API 对接 + Web 界面）均已完成；TrainingPeaks/intervals.icu 对接未做。agentic 演进（`agentic-plan.md`：AI 顾问 agentic 查询 / 对话持久化与直接对话 / AI 记忆）四个阶段已全部完成并验证。
 - **海拔单位隐藏 bug 已修复**（P3 过程中发现）：解析器按 `lengthUnit: "km"` 会把海拔/爬升缩放成 km，此前海拔输出与爬坡检测被压低 1000 倍（MAGENE 海拔恒 0 故从未暴露），现已统一换回米。
 - 没有 CI、没有部署流程——这是一个纯本地脚本项目（git 仅用于本地版本控制）。
-- 项目源码统一使用 ESM（`.js` + `"type": "module"`），`fit-file-parser` 为 CommonJS 包，通过默认导入（`import FitParser from "fit-file-parser"`）由 Node 的 CJS-ESM 互操作处理。
-- FIT 解析已开启 `force: true` 容忍损坏文件；被跳过的记录通过 `data_quality`（无时间戳丢弃数、时间跨度内缺失秒数——不含计时暂停、暂停秒数单列）与 `anomalies`（≥10s 整段空缺标注：计时暂停 `timer_pause` / 数据缺失 `record_gap`，阈值见 src/settings.js `DATA_QUALITY`）体现。
+- 项目源码统一使用 ESM（`.js` + `"type": "module"`）；`fit-file-parser` 自 3.x 起本身就是 ESM 包（`"type": "module"`，同时提供 `import`/`require` 双入口与 TS 声明），源码里的 `import FitParser from "fit-file-parser"` 是原生 ESM 默认导入，**不再经过 CJS-ESM 互操作**（该包早期版本才是 CommonJS）。
+- FIT 解析已开启 `force: true`：校验失败与可恢复的字段错误尽力容忍；被跳过的记录通过 `data_quality`（无时间戳丢弃数、时间跨度内缺失秒数——不含计时暂停、暂停秒数单列）与 `anomalies`（≥10s 整段空缺标注：计时暂停 `timer_pause` / 数据缺失 `record_gap`，阈值见 src/settings.js `DATA_QUALITY`）体现。
+- **fit-file-parser 5.x 升级适配（v1.9.6）**：升级到 `^5.2.1` 后实测原有三份真实 FIT 的 `records`/`sessions`/`events`/`laps`/`lengths` **逐字段完全一致**（海拔/距离仍按 `lengthUnit` 缩放为 km，`index.js` 的 `*10000` / `*1000` 换算口径不变；`product_name`、`sport` 枚举、开发者字段统计均无变化），唯一影响本项目的破坏性变更是**结构校验变严**：头 `data_size` 超过实际字节数时直接报错 `File data exceeds input length`（v3 会静默按 EOF 截断），未传完/损坏的文件会从「出部分结果 + 缺失计数」退化为整个解析失败。为此 `index.js` 新增纯函数 `patchTruncatedFitHeader()`——把 FIT 头 offset 4..8 的 `data_size`（uint32 LE）改写为实际可用字节数后重试（只改头声明、不动数据，恢复出的记录数与 v3 截断口径一致）；`analyzeFile()` 捕获首次解析错误后按需重试，修复后仍失败则抛原始错误。另需注意 v5 的两个可选行为：**`elapsed_time` / `timer_time` 默认不再出现在 record 上**（需显式 `elapsedRecordField: true`；本项目未使用这两个字段，且它们已在 `STANDARD_RECORD_FIELDS` 排除表内，故无影响），掩码字段变为 `{ value, ...flags }` 对象（不再带 `"0"` 键，本项目只收集数值型开发者字段，无影响）。回归覆盖见 `test/unit.test.mjs`（`patchTruncatedFitHeader` 四例）与 `test/e2e.test.mjs`（截断文件出部分结果 / 修复后仍失败抛原始错误）。
+- FIT 解析**并非用于暂停识别**：`fit-file-parser` 3.x 与 5.x 对同一文件的 `records` 与 `events` 输出完全一致，码表暂停（`timer_pause`）的判定完全由本项目的 `detectPauseSpans()` 三级判据负责；实测 MAGENE C506SE 不写 timer 事件，暂停靠「距离冻结 + 恢复侧静止」命中，其分级结果与设备自报的 `total_elapsed_time − total_timer_time`（2026-09-04：678s vs 本项目 648s 暂停 + 28s 缺失 = 676s）吻合到秒级。
 - 已支持骑行/跑步/游泳三类：骑行指标最全；跑步为配速/步频/心率体系（无功率段）；游泳为 length 消息统计（趟数/泳池长度/划水/SWOLF）+ 心率。更细的运动类型适配（如公开水域游泳、铁人三项拼接）未做。
 
 ## 安全考虑

@@ -122,6 +122,38 @@ test("损坏兜底：整段记录缺失 + 无时间戳坏记录被计数标注",
   assert.ok(summary.anomalies.some((a) => formatAnomaly(a, "zh").includes("记录缺失 45s")));
 });
 
+test("损坏兜底：文件被截断仍出部分结果（v5 结构校验更严，头声明被改写后重试）", async () => {
+  // 1800 秒的骑行文件截断到 60%：头里 data_size 仍声明完整长度。
+  // fit-file-parser v5 会直接报 "File data exceeds input length"，
+  // analyzeFile 改写头声明后重试，保持「损坏文件仍能分析出部分结果」的旧行为。
+  const full = gen.buildRideFit({ powerGap: [600, 60] });
+  const truncated = full.subarray(0, Math.round(full.length * 0.6));
+  const fit = writeFit("truncated.fit", truncated);
+
+  const { summary, csvPath } = await analyzeFile(fit, outDir);
+  assert.ok(fs.existsSync(csvPath));
+
+  // 解析出前段记录，但明显少于完整的 1800 秒（丢的是文件尾部，不体现为缺失秒数）
+  const count = summary.data_quality.record_count;
+  assert.ok(count > 0 && count < 1800, `截断文件应解析出部分记录，实际 ${count}`);
+  // 逐秒网格从首条记录连续到末条记录
+  assert.equal(summary.activity.duration_sec, count);
+  // 指标管线跑通：恒定功率 200W → NP 仍是 200
+  assert.equal(summary.power.normalized_power, 200);
+  // 截断把文件尾部的 session 消息也切掉了 → 运动类型回落 unknown（v3 截断时同样如此）
+  assert.equal(summary.activity.sport, "unknown");
+});
+
+test("损坏兜底：截断文件修复后仍失败时抛出原始错误", async () => {
+  // 头合法但数据字节全是 0xff：改写头声明也无法解析出 FIT 数据
+  const garbage = Buffer.concat([
+    gen.buildRideFit().subarray(0, 14), // 合法头（含完整声明）
+    Buffer.alloc(2000, 0xff),
+  ]);
+  const fit = writeFit("garbage.fit", garbage);
+  await assert.rejects(() => analyzeFile(fit, outDir));
+});
+
 test("暂停识别：停车暂停计时不标数据缺失，时长/TSS 剔除暂停", async () => {
   // 前 600s 骑行（10 m/s），600-960s 暂停码表（无记录），恢复后先静止 5s 再继续骑
   const fit = writeFit(
