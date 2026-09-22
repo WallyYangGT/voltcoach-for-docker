@@ -28,7 +28,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ATHLETE, AI_CONFIG, FTP_ESTIMATION } from "./settings.js";
 import { normalizeLang, t, formNote } from "./i18n.js";
 
-const DB_PATH = process.env.FIT_DB_PATH || path.resolve("db", "fitness.db");
+export const DB_PATH = process.env.FIT_DB_PATH || path.resolve("db", "fitness.db");
 
 let _db = null;
 

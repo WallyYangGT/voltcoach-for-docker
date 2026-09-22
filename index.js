@@ -26,6 +26,7 @@ import {
   getProfile,
   getLang,
 } from "./src/db.js";
+import { exportBackup } from "./src/export.js";
 import {
   buildReviewPrompt,
   buildPlanPrompt,
@@ -1232,6 +1233,11 @@ async function main() {
   syncAthleteFromDb();
 
   // ---- 训练库查询子命令 ----
+  if (input === "--export") {
+    // 迁移包：db + output/*.records.csv → .fitbackup（安卓版 VoltCoach 导入，§7.3）
+    exportBackup(process.argv[3]);
+    return;
+  }
   if (input === "--monthly") {
     printMonthly(Number(process.argv[3]) || 6);
     return;
@@ -1270,6 +1276,9 @@ async function main() {
   if (!input || !fs.existsSync(input)) {
     console.error("用法:");
     console.error("  node index.js <输入.fit 或包含 .fit 的目录> [输出目录]");
+    console.error(
+      "  node index.js --export [输出目录]             打包 .fitbackup 迁移包（安卓版导入）",
+    );
     console.error("  node index.js --monthly [月数=6]              逐月训练汇总");
     console.error(
       "  node index.js --trend [月数=12] [输出.html]   生成 CTL/ATL/TSB 趋势图",
