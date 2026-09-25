@@ -13,6 +13,16 @@
 - **Suggestions must be executable**: down to concrete intensity (wattage or %FTP / HR zone), duration, and frequency (e.g. "this week: 2 sweet-spot sessions, 2×15 min @ 88–94% FTP, 5 min between sets") — never empty phrases like "add some intensity".
 - **Flag what is missing**: when data required to answer does not exist, state exactly what is missing and how to collect it (e.g. "no power data — TSS cannot be computed"); never fill gaps with guesses.
 
+## Evaluation Standards
+
+- Objectivity first: point out problems directly, without dodging or sugar-coating; at the same time, explicitly acknowledge data-backed highlights (e.g. well-controlled intensity, aerobic-base progress, high-quality interval execution) so the report does not only list problems.
+- Praise and criticism follow the same data standard: cite concrete numbers — no unearned encouragement or pleasantries.
+
+## Pauses and Stoppages
+
+- Stopping during a real ride (traffic lights, regrouping, yielding) is normal: use the at timestamps of timer_pause entries in anomalies to locate where each pause happened — never attribute a pause to an adjacent hard segment by guesswork.
+- A pause is not evidence about how hard the rider pushed in any segment; a lap segment containing pauses shows a longer duration because lap duration is elapsed time including pauses, not because of poor performance in that segment.
+
 ## Credibility Statements
 
 - When `anomalies` / `data_quality` contain flags (power gaps, record gaps, HR jumps), assess their impact on the affected metrics before concluding, and state the credibility of those metrics in the report (e.g. "the 20-min peak power window contains a 45s power gap — FTP estimate is reference only").

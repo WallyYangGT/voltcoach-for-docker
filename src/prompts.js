@@ -4,7 +4,8 @@
  * 拼成完整 Markdown，打印到终端供一键复制给任意 AI（API 对接属 P4）。
  *
  * 双语（zh 默认 / en）：所有 builder 接受可选 lang 末参，静态文本按语言切换
- * （zh 文案与历史版本逐字一致，回归测试断言依赖）；动态数据（JSON/数值/
+ * （回归测试断言依赖；2026-09-25 客观性修正起 zh 文案与安卓版 VoltCoach 逐字
+ * 同步、不再与更早历史版本逐字一致）；动态数据（JSON/数值/
  * profile/备注/记忆原文）为语言中立，原样透传——用户自填内容不翻译。
  *
  * 指标口径说明由 settings.js 动态生成，改骑手参数/分区后提示词自动同步。
@@ -23,7 +24,7 @@ const TEXT = {
   zh: {
     role: `## 角色
 
-你是一位严谨、务实的自行车教练，熟悉 Coggan 功率训练体系与 TrainingPeaks 负荷模型。请基于数据给出具体、可执行的建议，避免泛泛而谈；数据缺失或可信度不足时明确指出，不要编造。`,
+你是一位严谨、务实的自行车教练，熟悉 Coggan 功率训练体系与 TrainingPeaks 负荷模型。请基于数据给出具体、可执行的建议，避免泛泛而谈；评价客观平衡——做得好的地方（有数据支撑）明确肯定，存在的问题也直接指出，不回避不美化；数据缺失或可信度不足时明确指出，不要编造。`,
 
     "glossary.head": `## 指标口径与骑手参数`,
     "glossary.rider": `骑手参数：FTP {ftp}W，最大心率 {hr}bpm，体重 {kg}kg。`,
@@ -38,6 +39,10 @@ const TEXT = {
     "glossary.power_zone_line": `  - {name}: {min}–{max} FTP`,
     "glossary.hr_zones": `心率分区（%最大心率）：`,
     "glossary.hr_zone_line": `  - {name}: {min}–{max} 最大心率`,
+    "glossary.data_note.head": `数据口径注意：`,
+    "glossary.data_note.0": `- 功率分区按秒级功率值统计：0W（滑行、下坡、停车但计时未停）也计入 Z1，Z1 占比高不等于没有踩踏输出；`,
+    "glossary.data_note.1": `- duration_sec 已剔除计时暂停；anomalies 中 timer_pause 条目的 at 为暂停起始时刻，可据此定位暂停发生的环节；`,
+    "glossary.data_note.2": `- segments 中 lap 分段的 duration_sec 为含暂停的经过时间，与整体时长口径不同。`,
 
     "sec.now": `## 当前时间`,
     "sec.now.line": `今天是 {date}（{weekday}），当前时刻 {time}（UTC{offset}）。`,
@@ -98,11 +103,11 @@ const TEXT = {
     "sec.review.note": `用户还为本次训练填写了备注（见 activity.note 字段，内容为体感/路况等主观信息），请结合备注与客观数据互相印证（例如体感差是否对应心率漂移偏大、路况是否解释了功率波动）。`,
     "review.q.0": `参考用户标记的分类，判断本次记录的训练/比赛属性，并说明依据。`,
     "review.q.note": `结合用户备注（activity.note）解读本次训练：主观感受与客观数据是否一致？有何线索？`,
-    "review.q.1": `评估功率与心率的强度分布是否合理：对该训练类型而言，各区时间占比是否符合预期？`,
+    "review.q.1": `评估功率与心率的强度分布是否合理：基线结合用户标记的分类与场景判断（如通勤/热身/恢复骑以 Z1–Z2 为主属正常），各区时间占比是否符合预期？`,
     "review.q.2": `评估心率漂移（有氧解耦）：数值说明什么？对有氧基础训练有何指示？`,
     "review.q.3": `如有间歇组（interval_set）或爬坡段（climbs）：完成质量如何（功率达成度、衰减情况）？`,
     "review.q.4": `结合 athlete_context 中的 CTL/ATL/TSB，评价这次训练在当前训练周期中的位置与必要性。`,
-    "review.q.5": `如 anomalies / data_quality 有异常标注，说明可能原因及数据可信度影响。`,
+    "review.q.5": `如 anomalies / data_quality 有异常标注：先按 timer_pause 的 at 时间戳对照时间线定位暂停发生的环节（如热身、通勤、间歇之间、放松），再说明可能原因及对数据可信度与相关段落解读的影响；红绿灯、会合等造成的暂停是真实骑行的正常现象，不要解读为对应环节「没有出力」，也不要凭推测把暂停安放到某个发力段；无法确定位置时如实说明。`,
     "review.q.6": `给出 2-3 条下次同类训练的改进建议。`,
 
     "sec.plan.monthly": `## 逐月训练汇总`,
@@ -138,7 +143,7 @@ const TEXT = {
   en: {
     role: `## Role
 
-You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power training system and the TrainingPeaks load model. Base your advice on the data — be specific and actionable, avoid generic platitudes. When data is missing or unreliable, say so explicitly; never make things up.`,
+You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power training system and the TrainingPeaks load model. Base your advice on the data — be specific and actionable, avoid generic platitudes. Be objective and balanced: explicitly acknowledge what the data shows was done well, and point out problems just as directly — do not dodge or sugar-coat. When data is missing or unreliable, say so explicitly; never make things up.`,
 
     "glossary.head": `## Metrics & Athlete Parameters`,
     "glossary.rider": `Athlete parameters: FTP {ftp} W, max HR {hr} bpm, weight {kg} kg.`,
@@ -153,6 +158,10 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     "glossary.power_zone_line": `  - {name}: {min}–{max} FTP`,
     "glossary.hr_zones": `Heart rate zones (%HRmax):`,
     "glossary.hr_zone_line": `  - {name}: {min}–{max} HRmax`,
+    "glossary.data_note.head": `Data conventions to note:`,
+    "glossary.data_note.0": `- Power zones are computed from per-second power values: 0 W seconds (coasting, descending, stationary with the timer still running) also count toward Z1 — a high Z1 share does not mean the rider was not pedaling;`,
+    "glossary.data_note.1": `- duration_sec excludes timer pauses; the at field of timer_pause entries in anomalies is the pause start time, which locates where each pause happened;`,
+    "glossary.data_note.2": `- duration_sec of lap segments in segments is elapsed time including pauses, which differs from the overall duration convention.`,
 
     "sec.now": `## Current Date & Time`,
     "sec.now.line": `Today is {weekday}, {date}; local time {time} (UTC{offset}).`,
@@ -213,11 +222,11 @@ The user has categorized this record as **{cat}**. Interpret it accordingly; if 
     "sec.review.note": `The user also left a note for this workout (activity.note — subjective info such as feel/conditions); cross-check it against the objective data (e.g. does poor feel match high HR drift, do road conditions explain power swings).`,
     "review.q.0": `Given the category the user assigned, decide whether this record is a workout or a race and justify your judgment.`,
     "review.q.note": `Interpret this workout with the user's note (activity.note): do the subjective feelings match the objective data? Any clues?`,
-    "review.q.1": `Assess whether the power and HR intensity distributions are appropriate for this training type: are the zone time shares as expected?`,
+    "review.q.1": `Assess whether the power and HR intensity distributions are appropriate, judging the baseline against the user-assigned category and context (e.g. a commute/warm-up/recovery ride dominated by Z1–Z2 is normal): are the zone time shares as expected?`,
     "review.q.2": `Evaluate HR drift (aerobic decoupling): what does the number mean, and what does it indicate for aerobic-base training?`,
     "review.q.3": `If there are interval sets (interval_set) or climbs: how was execution quality (power achieved, decay)?`,
     "review.q.4": `Using CTL/ATL/TSB from athlete_context, judge where this workout sits in the current training cycle and whether it was necessary.`,
-    "review.q.5": `If anomalies / data_quality flags exist, explain likely causes and their impact on data reliability.`,
+    "review.q.5": `If anomalies / data_quality flags exist: first locate where each timer_pause happened by matching its at timestamp against the timeline (e.g. warm-up, commuting, between intervals, cool-down), then explain likely causes and the impact on data reliability and on reading the affected segments; pauses at traffic lights or regrouping are normal in real riding — do not read them as "no effort" where they occur, and do not place a pause into a hard segment by guesswork; say so plainly when the location cannot be determined.`,
     "review.q.6": `Give 2-3 improvement suggestions for the next similar workout.`,
 
     "sec.plan.monthly": `## Monthly Training Summary`,
@@ -290,6 +299,11 @@ export function buildMetricGlossary(lang = "zh") {
     "",
     TT(lang, "glossary.hr_zones"),
     hrZones,
+    "",
+    TT(lang, "glossary.data_note.head"),
+    TT(lang, "glossary.data_note.0"),
+    TT(lang, "glossary.data_note.1"),
+    TT(lang, "glossary.data_note.2"),
   ].join("\n");
 }
 
@@ -507,7 +521,11 @@ function aggregateAnomalies(anomalies) {
 
 /**
  * 压缩 summary 中随时长增长的列表，返回新对象（原对象不变）：
- * - anomalies 超过 ANOMALY_RAW_MAX 条 → 替换为 anomalies_summary 聚合统计；
+ * - anomalies 超过 ANOMALY_RAW_MAX 条 → timer_pause（计时暂停）不参与聚合、
+ *   逐条保留在 anomalies 里，其余类型替换为 anomalies_summary 聚合统计。
+ *   暂停的 at 是判断其落在哪个环节（热身/通勤/间歇之间）的唯一位置证据，
+ *   聚合掉会迫使 AI 凭叙述需要"安放"暂停（真实缺陷：热身段暂停被归因为
+ *   冲刺段没出力）；通勤红灯多也就十几条，逐条保留体积可控。
  * - segments 超过 SEGMENTS_MAX 段 → 保留首尾，中间省略（首尾对比仍可看出衰减）；
  * - climbs 超过 CLIMBS_MAX 段 → 只保留爬升最大的段。
  * 最后统一经 localizeTimestamps 把 UTC 时间戳改写为本地时区偏移表示
@@ -517,8 +535,17 @@ export function compactSummaryForPrompt(summary, lang = "zh") {
   if (!summary || typeof summary !== "object") return summary;
   const out = { ...summary };
   if (Array.isArray(out.anomalies) && out.anomalies.length > ANOMALY_RAW_MAX) {
-    out.anomalies_summary = aggregateAnomalies(out.anomalies);
-    delete out.anomalies;
+    const isPause = (a) => a && typeof a === "object" && a.type === "timer_pause";
+    const pauses = out.anomalies.filter(isPause);
+    const others = out.anomalies.filter((a) => !isPause(a));
+    if (pauses.length) {
+      out.anomalies = pauses;
+      const agg = aggregateAnomalies(others);
+      if (agg.length) out.anomalies_summary = agg;
+    } else {
+      out.anomalies_summary = aggregateAnomalies(others);
+      delete out.anomalies;
+    }
   }
   if (Array.isArray(out.segments) && out.segments.length > SEGMENTS_MAX) {
     const omitted = out.segments.length - SEGMENTS_KEEP_HEAD - SEGMENTS_KEEP_TAIL;

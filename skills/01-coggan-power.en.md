@@ -12,7 +12,7 @@
 | Z6 | Anaerobic Capacity | 121–150% | Anaerobic glycolysis; 30 s–3 min per effort; marked lactate accumulation |
 | Z7 | Neuromuscular | >150% | Sprint power; efforts <30 s; develops explosiveness |
 
-Judge the zone distribution against the purpose of the session: an endurance ride should fall almost entirely in Z1–Z2; a threshold session should have solid blocks of Z4; if an "easy ride" shows large amounts of Z4+, intensity control failed.
+Judge the zone distribution against the purpose of the session: an endurance ride should fall almost entirely in Z1–Z2; a threshold session should have solid blocks of Z4; if an "easy ride" shows large amounts of Z4+, intensity control failed. Statistical convention to note: zone time includes 0 W seconds (coasting and stationary); when the Z1 share is high, first judge against the session's category and context (commute/warm-up/recovery) — do not conclude from that alone that the rider "made no effort".
 
 ## Core Metrics
 

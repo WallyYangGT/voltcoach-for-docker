@@ -439,6 +439,42 @@ test("compactSummaryForPrompt: 大量 anomalies 聚合为按类型统计", () =>
   assert.equal(byType["心率跳变"].total_sec, undefined);
 });
 
+test("compactSummaryForPrompt: timer_pause 不参与聚合、逐条保留位置证据", () => {
+  // 暂停的 at 是判断其落在哪个环节（热身/通勤/间歇之间）的唯一位置证据，
+  // 聚合丢失会迫使 AI 凭叙述需要"安放"暂停——热身段暂停被归因为冲刺段没出力
+  const anomalies = [
+    { type: "timer_pause", duration_sec: 45, at: "2026-07-24T13:40:00.000Z" },
+    { type: "timer_pause", duration_sec: 30, at: "2026-07-24T13:52:00.000Z" },
+    { type: "power_gap", duration_sec: 78, at: "2026-07-24T13:43:40.000Z" },
+    { type: "power_gap", duration_sec: 65, at: "2026-07-24T14:36:53.000Z" },
+    { type: "record_gap", duration_sec: 25, at: "2026-07-24T13:54:16.000Z" },
+    { type: "hr_jump", at: "2026-07-24T14:05:00.000Z" },
+  ];
+  const out = compactSummaryForPrompt({ anomalies });
+  assert.equal(out.anomalies.length, 2);
+  assert.ok(out.anomalies.every((a) => a.type === "timer_pause"));
+  assert.equal(out.anomalies[0].duration_sec, 45);
+  assert.equal(instantOf(out.anomalies[0].at), Date.parse("2026-07-24T13:40:00.000Z"));
+  assert.equal(instantOf(out.anomalies[1].at), Date.parse("2026-07-24T13:52:00.000Z"));
+  const byType = Object.fromEntries(out.anomalies_summary.map((g) => [g.type, g]));
+  assert.equal(byType["power_gap"].count, 2);
+  assert.equal(byType["power_gap"].total_sec, 143);
+  assert.equal(byType["record_gap"].count, 1);
+  assert.equal(byType["hr_jump"].count, 1);
+  assert.equal(byType["timer_pause"], undefined);
+});
+
+test("compactSummaryForPrompt: 全部为 timer_pause 时逐条保留、不产生空聚合", () => {
+  const anomalies = Array.from({ length: 7 }, (_, i) => ({
+    type: "timer_pause",
+    duration_sec: 20 + i,
+    at: `2026-07-24T1${i}:00:00.000Z`,
+  }));
+  const out = compactSummaryForPrompt({ anomalies });
+  assert.equal(out.anomalies.length, 7);
+  assert.equal(out.anomalies_summary, undefined);
+});
+
 test("compactSummaryForPrompt: 超长 segments 保留首尾并标注省略", () => {
   const segments = Array.from({ length: 30 }, (_, i) => ({ name: `lap_${i + 1}` }));
   const out = compactSummaryForPrompt({ segments });
