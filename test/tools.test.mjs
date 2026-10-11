@@ -142,4 +142,20 @@ test("reanalyze_activity：file_name 校验/缺失拒绝；FTP 变更后重算�
   assert.equal(after.athlete_context.ftp_watts, 124);
   // 当日 CTL/ATL/TSB 两段式注入
   assert.ok(parsed.form && Number.isFinite(parsed.form.ctl));
+
+  // 存量行回填（0W 根治）：剥掉 pedal_time/stationary 后重算 → 按 records 补回
+  const legacy = JSON.parse(JSON.stringify(getActivitySummary(RIDE_NAME)));
+  delete legacy.pedal_time;
+  legacy.anomalies = (legacy.anomalies ?? []).filter((a) => a.type !== "stationary");
+  upsertActivity(RIDE_NAME, legacy);
+  const backfilled = JSON.parse(
+    await executeTool("reanalyze_activity", { file_name: RIDE_NAME }, { lang: "zh" }),
+  );
+  assert.equal(backfilled.ok, true);
+  assert.deepEqual(getActivitySummary(RIDE_NAME).pedal_time, {
+    sample_sec: 60,
+    pedaling_sec: 60,
+    coasting_sec: 0,
+    stationary_sec: 0,
+  });
 });

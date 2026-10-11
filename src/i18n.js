@@ -290,7 +290,7 @@ export function formNote(tsb, lang) {
 
 /**
  * 结构化异常标注 → 展示文本。
- * 新格式：{ type: "power_gap"|"record_gap"|"timer_pause"|"hr_jump", duration_sec?, from?, to?, at }
+ * 新格式：{ type: "power_gap"|"record_gap"|"timer_pause"|"stationary"|"hr_jump", duration_sec?, from?, to?, at }
  * 旧数据（字符串 anomalies）原样透传，不做翻译。
  */
 export function formatAnomaly(a, lang) {
