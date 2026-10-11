@@ -870,7 +870,7 @@ if (isMain) {
   syncAthleteFromDb();
   syncAiConfigFromDb();
   createServer().listen(PORT, () => {
-    console.log(`fit-reader Web 界面: http://localhost:${PORT}`);
+    console.log(`VoltCoach Web 界面: http://localhost:${PORT}`);
     if (!isAiConfigured())
       console.log("提示: 未配置 AI 密钥（设置页可配），AI 报告将退化为复制提示词模式");
     logTimezoneHint();

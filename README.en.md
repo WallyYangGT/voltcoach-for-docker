@@ -1,4 +1,4 @@
-# fit-reader
+# VoltCoach
 
 A local training analytics tool that parses `.fit` files exported from bike computers and sports watches. It outputs a per-second time-series CSV and a summary metrics JSON, and provides a web dashboard plus AI training reports.
 
@@ -41,14 +41,14 @@ npm test
 Images are published to GitHub Packages — pull and run:
 
 ```bash
-docker pull ghcr.io/sicheng886/fit-reader:latest
+docker pull ghcr.io/wallyyanggt/voltcoach-for-docker:latest
 docker run -d \
-  --name fit-reader \
+  --name voltcoach-for-docker \
   -p 3000:3000 \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
-  ghcr.io/sicheng886/fit-reader:latest
+  ghcr.io/wallyyanggt/voltcoach-for-docker:latest
 ```
 
 Then open http://localhost:3000.

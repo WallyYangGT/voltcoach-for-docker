@@ -50,7 +50,7 @@ test("静态首页可访问", async () => {
   const resp = await fetch(base + "/");
   assert.equal(resp.status, 200);
   const html = await resp.text();
-  assert.match(html, /FIT/);
+  assert.match(html, /VOLT/);
   assert.match(resp.headers.get("content-type"), /text\/html/);
 });
 

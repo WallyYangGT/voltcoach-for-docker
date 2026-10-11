@@ -1,4 +1,4 @@
-# fit-reader
+# VoltCoach
 
 一个解析码表/运动手表 `.fit` 文件的本地训练分析工具，输出逐秒时序 CSV 与汇总指标 JSON，并提供 Web 仪表盘与 AI 训练报告。
 
@@ -41,14 +41,14 @@ npm test
 已发布镜像到 GitHub Packages，可直接拉取运行：
 
 ```bash
-docker pull ghcr.io/sicheng886/fit-reader:latest
+docker pull ghcr.io/wallyyanggt/voltcoach-for-docker:latest
 docker run -d \
-  --name fit-reader \
+  --name voltcoach-for-docker \
   -p 3000:3000 \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
-  ghcr.io/sicheng886/fit-reader:latest
+  ghcr.io/wallyyanggt/voltcoach-for-docker:latest
 ```
 
 启动后访问 http://localhost:3000 即可使用。

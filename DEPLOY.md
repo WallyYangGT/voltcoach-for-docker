@@ -1,6 +1,6 @@
-# fit-reader Docker 部署指南
+# VoltCoach Docker 部署指南
 
-把 fit-reader 打包成 Docker 镜像并部署为本地/服务器 Web 服务。
+把 VoltCoach 打包成 Docker 镜像并部署为本地/服务器 Web 服务。
 
 ---
 
@@ -18,10 +18,10 @@
 在项目根目录执行：
 
 ```bash
-docker build -t fit-reader:latest .
+docker build -t voltcoach-for-docker:latest .
 ```
 
-构建完成后，可用 `docker images | grep fit-reader` 查看镜像。
+构建完成后，可用 `docker images | grep voltcoach-for-docker` 查看镜像。
 
 ---
 
@@ -64,7 +64,7 @@ docker compose pull          # 如果镜像已推送到仓库，先拉取最新
 **获取 Moonshot API Key 的步骤：**
 
 1. 打开 [Moonshot 开放平台](https://platform.moonshot.cn/)，登录/注册账号。
-2. 进入「API Key 管理」页面，点击「创建 API Key」，起个名字，例如 `fit-reader`。
+2. 进入「API Key 管理」页面，点击「创建 API Key」，起个名字，例如 `voltcoach`。
 3. 复制以 `sk-` 开头的字符串，粘贴到设置页的「API 密钥」输入框。
 
 > ⚠️ 安全提示：API Key 等同于账号密码。它只保存在本地训练库（`./db/fitness.db`，已被 `.gitignore` 排除）中，用于向你配置的接口地址发请求，不会上传到任何其它地方。
@@ -79,26 +79,26 @@ docker compose pull          # 如果镜像已推送到仓库，先拉取最新
 
 ```bash
 docker run -d \
-  --name fit-reader \
+  --name voltcoach-for-docker \
   -p 3000:3000 \
   -e TZ=Asia/Shanghai \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
-  fit-reader:latest
+  voltcoach-for-docker:latest
 ```
 
 Windows PowerShell 中挂载路径写法：
 
 ```powershell
 docker run -d `
-  --name fit-reader `
+  --name voltcoach-for-docker `
   -p 3000:3000 `
   -e TZ=Asia/Shanghai `
   -v "${PWD}/input:/input" `
   -v "${PWD}/output:/output" `
   -v "${PWD}/db:/app/db" `
-  fit-reader:latest
+  voltcoach-for-docker:latest
 ```
 
 ---
@@ -111,7 +111,7 @@ docker run -d `
 docker run --rm \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
-  fit-reader:latest \
+  voltcoach-for-docker:latest \
   node index.js /input /output
 ```
 
@@ -137,13 +137,13 @@ docker run --rm \
 ```bash
 # 编辑 src/settings.js 里的分区 / 阈值 / ATHLETE、AI_CONFIG 出厂默认值
 docker run -d \
-  --name fit-reader \
+  --name voltcoach-for-docker \
   -p 3000:3000 \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
   -v "$(pwd)/src/settings.js:/app/src/settings.js" \
-  fit-reader:latest
+  voltcoach-for-docker:latest
 ```
 
 或者在 `docker-compose.yml` 中保留 `- ./src/settings.js:/app/src/settings.js` 挂载。
@@ -164,7 +164,7 @@ docker compose up -d --build
 或单独构建：
 
 ```bash
-docker build -t fit-reader:latest .
+docker build -t voltcoach-for-docker:latest .
 docker compose up -d
 ```
 
@@ -175,7 +175,7 @@ docker compose up -d
 ### 8.1 容器启动后无法访问 `localhost:3000`
 
 1. 检查容器是否运行：`docker ps -a`
-2. 查看日志：`docker logs fit-reader`
+2. 查看日志：`docker logs voltcoach-for-docker`
 3. 检查端口是否被占用：
    - 在 `docker-compose.yml` 或 `docker run` 中换一个宿主机端口，例如 `-p 8080:3000`
 
@@ -185,13 +185,13 @@ docker compose up -d
 
 ```bash
 docker run -d \
-  --name fit-reader \
+  --name voltcoach-for-docker \
   -u "$(id -u):$(id -g)" \
   -p 3000:3000 \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
-  fit-reader:latest
+  voltcoach-for-docker:latest
 ```
 
 使用 `docker compose` 时，在 `docker-compose.yml` 里加：
@@ -248,7 +248,7 @@ gh auth token | docker login ghcr.io -u USERNAME --password-stdin
 ```bash
 VERSION=$(node -p "require('./package.json').version")
 OWNER=$(gh api user -q .login)   # 或手动写死为你的 GitHub 用户名/组织名
-IMAGE=ghcr.io/${OWNER}/fit-reader
+IMAGE=ghcr.io/${OWNER}/voltcoach-for-docker
 
 docker build \
   --build-arg VERSION=${VERSION} \
@@ -264,23 +264,23 @@ docker push ${IMAGE}:latest
 
 推送完成后，在 GitHub Packages 页面能看到两个标签：
 
-- `ghcr.io/<OWNER>/fit-reader:<VERSION>`（不可变，建议生产环境锁定该标签）
-- `ghcr.io/<OWNER>/fit-reader:latest`（可变，方便快速体验/测试）
+- `ghcr.io/<OWNER>/voltcoach-for-docker:<VERSION>`（不可变，建议生产环境锁定该标签）
+- `ghcr.io/<OWNER>/voltcoach-for-docker:latest`（可变，方便快速体验/测试）
 
 ### 9.4 拉取最新版本运行
 
 ```bash
-docker pull ghcr.io/<OWNER>/fit-reader:latest
+docker pull ghcr.io/<OWNER>/voltcoach-for-docker:latest
 docker run -d \
-  --name fit-reader \
+  --name voltcoach-for-docker \
   -p 3000:3000 \
   -v "$(pwd)/input:/input" \
   -v "$(pwd)/output:/output" \
   -v "$(pwd)/db:/app/db" \
-  ghcr.io/<OWNER>/fit-reader:latest
+  ghcr.io/<OWNER>/voltcoach-for-docker:latest
 ```
 
-生产环境建议锁定具体版本号，例如 `ghcr.io/<OWNER>/fit-reader:1.0.0`。
+生产环境建议锁定具体版本号，例如 `ghcr.io/<OWNER>/voltcoach-for-docker:1.0.0`。
 
 ---
 
@@ -290,7 +290,7 @@ docker run -d \
 
 - [ ] 已创建/确认 `input/` 目录（用于放 `.fit` 文件）
 - [ ] 已创建/确认 `output/` 目录（用于接收结果）
-- [ ] 已运行 `docker build -t fit-reader:latest .` 且成功
+- [ ] 已运行 `docker build -t voltcoach-for-docker:latest .` 且成功
 - [ ] 已运行 `docker compose up -d`
 - [ ] 浏览器能打开 `http://localhost:3000`，并在设置页保存骑手参数（与 AI 密钥）
 - [ ] 上传一个 `.fit` 文件后，`output/` 出现对应的 CSV 与 JSON

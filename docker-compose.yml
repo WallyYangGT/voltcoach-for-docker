@@ -1,8 +1,8 @@
 services:
-  fit-reader:
+  voltcoach-for-docker:
     build: .
-    image: fit-reader:latest
-    container_name: fit-reader
+    image: voltcoach-for-docker:latest
+    container_name: voltcoach-for-docker
     ports:
       - "3333:3000"
     environment:

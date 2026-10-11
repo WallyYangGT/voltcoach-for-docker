@@ -1,8 +1,8 @@
-# AGENTS.md — fit-reader 项目说明（供 AI 编码代理阅读）
+# AGENTS.md — VoltCoach（voltcoach-for-docker）项目说明（供 AI 编码代理阅读）
 
 ## 项目概览
 
-**fit-reader** 是一个无构建步骤的 Node.js 命令行项目（主脚本 `index.js` + 配置 `src/settings.js`），用于解析码表/运动手表导出的 `.fit` 文件（当前以骑行数据为主），输出两类结果：
+**VoltCoach**（GitHub 仓库名 `voltcoach-for-docker`，与安卓版 App 对齐）是一个无构建步骤的 Node.js 命令行项目（主脚本 `index.js` + 配置 `src/settings.js`），用于解析码表/运动手表导出的 `.fit` 文件（当前以骑行数据为主），输出两类结果：
 
 1. `xxx.records.csv` — 重采样到严格 1 秒网格的逐秒时序明细（timestamp, power, heart_rate, cadence, altitude, speed, distance_m, temperature），供存档与程序化计算；
 2. `xxx.summary.json` — 汇总训练指标（NP、IF、TSS、功率/心率分区分布、峰功率曲线、心率漂移、圈/赛段、数据质量与异常标注），设计上用于直接喂给 AI 做训练解读。
@@ -88,7 +88,7 @@ node index.js input/MAGENE_C506SE_2026-07-17_202219_1273797.fit output/
 ## 版本控制约定（重要）
 
 - 项目使用 **git** 进行版本控制。**每次完成修改后（无论是代码、配置还是文档变更）都必须先提升 `package.json` 中的 `version` 字段，再执行 `git commit`**，并附上清晰描述本次变更内容的中文 commit message。
-- 当前版本：`1.9.5`。版本号遵循语义化版本（SemVer）：`MAJOR.MINOR.PATCH`，bug 修复/小调整升 PATCH，新增功能升 MINOR，破坏性改动升 MAJOR。
+- 当前版本：`1.10.1`。版本号遵循语义化版本（SemVer）：`MAJOR.MINOR.PATCH`，bug 修复/小调整升 PATCH，新增功能升 MINOR，破坏性改动升 MAJOR。
 - 推荐工作流：
   1. 完成修改并跑通 `npm test`。
   2. 运行 `npm version patch|minor|major --no-git-tag-version`（仅修改 `package.json` 与 `package-lock.json`，不自动提交、不打 tag）。
@@ -135,7 +135,7 @@ summary.json 字段（喂 AI 的汇总结构，records.csv 列见上文「项目
 
 **双语（zh 默认 / en），单位保持公制**（W/km/km/h/kg/°C/m，不做英制换算）。覆盖 Web UI 全部文案、SVG 图表标签、AI 提示词与报告、服务端错误消息。
 
-- **检测与持久化**：前端首次启动（localStorage 无记录）按 `navigator.language` 检测——`startsWith('zh')` → zh，其余一律 en；存 localStorage（`fit-reader.lang`）并 `POST /api/lang` 同步到训练库 settings 表 `lang` 键。设置页可手动切换（切换即刷新并再次同步）。
+- **检测与持久化**：前端首次启动（localStorage 无记录）按 `navigator.language` 检测——`startsWith('zh')` → zh，其余一律 en；存 localStorage（`voltcoach.lang`）并 `POST /api/lang` 同步到训练库 settings 表 `lang` 键。设置页可手动切换（切换即刷新并再次同步）。
 - **服务端语言解析**（server.js `resolveLang`）：请求显式 `lang`（query / X-Lang 头）> 训练库 `lang` > Accept-Language（zh → zh，其他具体语言标签 → en；`*`/空视为无偏好回落 zh）> zh 默认。前端 `api()` 封装统一带 X-Lang 头；AI 报告/对话接口以请求体 `lang` 为准（异步后台任务在提交时捕获语言）。
 - **AI 报告语言**：提示词整体按语言生成（prompts.js 双语词典，英文模板自然产出英文报告，无需额外语言指令）；当前日期时间段经 dayjs locale 随语言渲染（zh-cn → 星期四 / en → Thursday，时区取服务器本地）；专业知识库按语言加载（skills/ 的 `.en.md` 文件）；工具 schema（tools.js `toolDefs(lang)`）与工具错误消息随语言切换。历史报告 markdown 保持生成时语言，不事后翻译。
 - **数据层语言中立**：summary.json 不存展示文本——anomalies 结构化（type 枚举）、cadence_power.style 枚举、athlete_context.form_state 枚举，展示时按请求语言渲染（formatAnomaly / form.note.* / cad.style.*）；旧库字符串数据原样透传。用户自填内容（身份/目标/备注/记忆）不翻译。**时间戳在提示词出口统一本地化**：数据落盘（summary.json / records.csv / 训练库日期）一律 UTC 口径不变，喂 AI 前经 `localizeTimestamps` 改写为带本地时区偏移的 ISO 表示（`11:51Z` → `19:51+08:00`），并在「当前时间」段声明该口径——否则 AI 会按字面把本地傍晚的骑行读成中午；纯日期字段（`activity.date`、训练库日期）不换算，以与界面显示、训练库查询保持一致。

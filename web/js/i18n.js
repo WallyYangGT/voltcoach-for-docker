@@ -6,7 +6,7 @@
  * 供 common.js 与各视图共用。
  */
 
-export const LANG_STORAGE_KEY = "fit-reader.lang";
+export const LANG_STORAGE_KEY = "voltcoach.lang";
 
 let lang = "zh";
 
@@ -397,7 +397,7 @@ const DICT = {
 
     // ---- 关于页（views/about.js） ----
     "about.title": "关于",
-    "about.sub": "fit-reader · 本地骑行/运动数据分析",
+    "about.sub": "VoltCoach · 本地骑行/运动数据分析",
     "about.features": "功能说明",
     "about.f0": "批量解析码表/运动手表导出的 <code>.fit</code> 文件，输出按秒对齐的 <code>records.csv</code> 与汇总 <code>summary.json</code>。",
     "about.f1": "自动计算 NP、IF、TSS、VI、功体比、峰功率曲线、功率/心率分区、心率漂移（有氧解耦）、间歇与爬坡识别。",
@@ -418,7 +418,7 @@ const DICT = {
 
     // ---- 入口（app.js 与 index.html 静态文案） ----
     "app.load_failed": "加载失败：{msg}",
-    "app.title": "fit-reader · 训练分析",
+    "app.title": "VoltCoach · 训练分析",
     "nav.dashboard": "概览",
     "nav.activities": "训练",
     "nav.upload": "上传",
@@ -788,7 +788,7 @@ const DICT = {
     "set.failed": "Save failed: {msg}",
 
     "about.title": "About",
-    "about.sub": "fit-reader · local cycling/sports data analytics",
+    "about.sub": "VoltCoach · local cycling/sports data analytics",
     "about.features": "Features",
     "about.f0": "Batch-parse <code>.fit</code> files exported from bike computers/watches; output second-aligned <code>records.csv</code> and a summary <code>summary.json</code>.",
     "about.f1": "Computes NP, IF, TSS, VI, W/kg, peak power curve, power/HR zones, HR drift (aerobic decoupling), interval and climb detection.",
@@ -808,7 +808,7 @@ const DICT = {
     "about.author_line": "Wally Yang @ 2026",
 
     "app.load_failed": "Load failed: {msg}",
-    "app.title": "fit-reader · Training Analytics",
+    "app.title": "VoltCoach · Training Analytics",
     "nav.dashboard": "Dashboard",
     "nav.activities": "Training",
     "nav.upload": "Upload",

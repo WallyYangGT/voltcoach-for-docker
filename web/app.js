@@ -1,5 +1,5 @@
 /**
- * app.js — fit-reader Web 前端入口（P4）
+ * app.js — VoltCoach Web 前端入口（P4）
  * 零依赖 SPA（浏览器原生 ES Module，无构建步骤）：hash 路由 + 顶栏导航 + 首开引导。
  * 共享基础在 js/common.js，SVG 图表在 js/charts.js，AI 报告/对话机制在 js/ai.js，
  * 各视图在 js/views/ 下（概览/训练/详情/上传/AI 报告/对话/记忆/设置）。
