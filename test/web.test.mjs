@@ -442,11 +442,19 @@ test("骑手参数接口：合法全量与部分更新", async () => {
   assert.equal(r1.status, 200);
   const d1 = await r1.json();
   assert.equal(d1.applied, true);
-  assert.deepEqual(d1.athlete, { ftp_watts: 140, max_hr: 190, weight_kg: 62.5 });
-  // 部分更新：只改体重，其余保留
+  // FTP 值实际变更 → athlete JSON 带溯源戳（ftp_updated_at/ftp_source，AI 代更新追溯用）
+  assert.equal(d1.athlete.ftp_watts, 140);
+  assert.equal(d1.athlete.max_hr, 190);
+  assert.equal(d1.athlete.weight_kg, 62.5);
+  assert.equal(d1.athlete.ftp_source, "manual");
+  assert.ok(typeof d1.athlete.ftp_updated_at === "string");
+  // 部分更新：只改体重，其余保留；FTP 未变 → 溯源戳不刷新
   const r2 = await post({ weight_kg: 61 });
   assert.equal(r2.status, 200);
-  assert.deepEqual((await r2.json()).athlete, { ftp_watts: 140, max_hr: 190, weight_kg: 61 });
+  const d2 = await r2.json();
+  assert.equal(d2.athlete.ftp_watts, 140);
+  assert.equal(d2.athlete.weight_kg, 61);
+  assert.equal(d2.athlete.ftp_updated_at, d1.athlete.ftp_updated_at);
   // GET 视角与库一致
   const g = await getJson("/api/athlete");
   assert.equal(g.data.configured, true);

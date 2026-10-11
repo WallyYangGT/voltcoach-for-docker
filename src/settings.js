@@ -29,7 +29,7 @@ export const AI_CONFIG = {
 
 // ============ Agentic 工具调用参数（ai.js runAgentLoop / tools.js 使用） ============
 export const AGENTIC = {
-  max_rounds: 6, // 最大工具调用轮数，超出后强制模型直接作答
+  max_rounds: 8, // 最大工具调用轮数，超出后强制模型直接作答（自 VoltCoach 同步：估算→更新 FTP→重算数次训练→汇总需更多轮）
   tool_result_max_chars: 16000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）；2026-10 由 4000 放宽 4×——start_sec/end_sec 窄窗逐秒核对在 4000 下也不可用（60s 全秒窗约 7k 字符），16k ≈ 4-8k tokens，BYOK 模型上下文可承受（自 VoltCoach b1b38d9 回同步）
   records_max_points: 600, // get_activity_records 时序抽稀点数上限
   list_limit: 50, // list_activities 返回条数上限
@@ -150,6 +150,7 @@ export const FTP_ESTIMATION = {
   coggan_factor: 0.95, // Coggan 口径：20 分钟峰功率 × 该系数 ≈ FTP
   apply_min_w: 50, // 「采纳写回」时可接受的 FTP 下限（W）
   apply_max_w: 500, // 「采纳写回」时可接受的 FTP 上限（W）
+  freshness_days: 7, // AI 自动采纳（update_ftp）专属门槛：窗口内最近一次骑行距今天 ≤ 该天数（天按 UTC 日历日差）
 };
 
 // ============ 踏频-功率联合分析阈值 ============

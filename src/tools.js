@@ -27,10 +27,14 @@ import {
   cyclingSummariesSince,
   computeForm,
   saveMemory,
+  setAthlete,
+  getFtpMeta,
+  upsertActivity,
 } from "./db.js";
 import { compactSummaryForPrompt, localizeTimestamps } from "./prompts.js";
 import { loadRecords, safeName } from "./records.js";
-import { estimateFtpFromHistory } from "./ftp.js";
+import { estimateFtpFromHistory, evaluateFtpApply } from "./ftp.js";
+import { rebuildSummaryFromRecords } from "./reanalyze.js";
 import { simulateForm, generateWorkout } from "./planning.js";
 import { t } from "./i18n.js";
 import { AGENTIC, ATHLETE, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from "./settings.js";
@@ -74,6 +78,9 @@ const TOOL_TEXT = {
     "save_memory.content": "记忆内容：带主语的完整陈述，≤500 字",
     "save_memory.category": "分类：general 通用 / injury 伤病 / schedule 日程 / goal 目标 / preference 偏好",
     "save_memory.supersedes_id": "取代某条旧记忆的 id（注入的记忆清单中有 #id 标注），同主题更新时使用",
+    update_ftp: "按当前最佳科学估算更新用户的 FTP 配置（无需参数，数值始终来自估算器而非模型自拟）。工具内部重新估算并硬校验数据量、两法一致性、全力锚点与数据新鲜度，不满足时返回拒绝原因与数据需求清单。",
+    reanalyze_activity: "按当前骑手参数（FTP/最大心率/体重）重新分析一次训练并写回训练库：从已存逐秒数据重算 IF/TSS/功率心率区间/间歇识别等并覆盖该训练的分析结果，返回新旧指标对比。FTP 更新后可对受影响的训练（如估算锚点骑行）或用户指名的训练使用。",
+    "reanalyze_activity.file_name": "训练文件名（list_activities 返回的 file_name）",
   },
   en: {
     list_activities: "Query the brief activity list (catalog page): date/type/category/duration/distance/TSS/NP/IF. Use it first to find the target activity's file_name, then dig into a single one with get_activity_summary or get_activity_records.",
@@ -108,6 +115,9 @@ const TOOL_TEXT = {
     "save_memory.content": "Memory content: a complete statement with a subject, ≤500 chars",
     "save_memory.category": "Category: general / injury / schedule / goal / preference",
     "save_memory.supersedes_id": "id of an old memory to supersede (ids are #annotated in the injected memory list); use when updating the same topic",
+    update_ftp: "Update the user's FTP configuration from the current best scientific estimate (no arguments; the value always comes from the estimator, never invented by the model). The tool re-estimates internally and hard-validates data volume, method consistency, all-out anchor and data freshness; when unmet it returns the refusal reason and data-needs list.",
+    reanalyze_activity: "Re-analyze one activity with the current athlete parameters (FTP/max HR/weight) and write it back to the library: recomputes IF/TSS/power-HR zones/interval detection etc. from stored per-second data, overwrites that activity's analysis results, and returns an old-vs-new metrics diff. Use after an FTP update for affected rides (e.g. the anchor ride) or rides the user names.",
+    "reanalyze_activity.file_name": "Activity file name (file_name from list_activities)",
   },
 };
 
@@ -286,6 +296,29 @@ export function toolDefs(lang = "zh") {
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "update_ftp",
+        description: L("update_ftp"),
+        // 零参：数值只来自估算器，模型没有自定 FTP 的入口
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "reanalyze_activity",
+        description: L("reanalyze_activity"),
+        parameters: {
+          type: "object",
+          properties: {
+            file_name: { type: "string", description: L("reanalyze_activity.file_name") },
+          },
+          required: ["file_name"],
+        },
+      },
+    },
   ];
 }
 
@@ -460,6 +493,115 @@ function toolSaveMemory(args, ctx) {
   );
 }
 
+/** update_ftp：AI 教练按当前最佳估算更新 FTP（零参——数值只来自估算器，模型无自定数值入口）。
+ *  编排自 VoltCoach services/ftp-apply.ts 回同步（旧仓无 services 层，直调 db.js） */
+function toolUpdateFtp(ctx) {
+  const lang = ctx?.lang || "zh";
+  const rides = cyclingSummariesSince(FTP_ESTIMATION.window_days);
+  const { athlete } = getAthleteState();
+  const result = estimateFtpFromHistory(rides, athlete, FTP_ESTIMATION, lang);
+  // 新鲜度依据：与估算器同款"可用"口径（有功率且覆盖率达标的骑行）中最近一次的日期
+  // ——无功率的新骑行不能证明估值所依据的数据新鲜；无可用骑行为 null → 门槛拒
+  const usableRides = rides.filter(
+    (r) =>
+      r.summary?.power &&
+      (r.summary.data_quality?.power_coverage_pct ?? 100) >= FTP_ESTIMATION.min_coverage_pct,
+  );
+  const latestRideDate = usableRides.reduce(
+    (max, r) => (r.date > (max ?? "") ? r.date : max),
+    null,
+  );
+  const today = new Date().toISOString().slice(0, 10);
+  const check = evaluateFtpApply(result, latestRideDate, today, FTP_ESTIMATION);
+  if (!check.ok || !result.estimate) {
+    return toResult(
+      {
+        applied: false,
+        reason: t(lang, check.reason_key ?? "ftp.apply.no_data", check.reason_vars),
+        estimate: result.estimate ?? undefined,
+        data_needs: result.data_needs,
+      },
+      lang,
+    );
+  }
+  const e = result.estimate;
+  const updated = setAthlete({ ftp_watts: e.ftp_w }, lang, { source: "ai_coach" });
+  const meta = getFtpMeta();
+  return toResult(
+    {
+      applied: true,
+      old_ftp_w: e.current_ftp_w,
+      new_ftp_w: updated.ftp_watts,
+      estimate: e,
+      updated_at: meta.updated_at,
+    },
+    lang,
+  );
+}
+
+/** reanalyze_activity：按当前骑手参数重算一次训练并写回，返回新旧指标对比。
+ *  编排自 VoltCoach services/reanalyze.ts 回同步（records 全量行适配 1s 网格形状） */
+function toolReanalyzeActivity(args, ctx) {
+  const lang = ctx?.lang || "zh";
+  const name = safeName(args?.file_name);
+  if (!name) return errResult(t(lang, "tool.name_invalid"));
+  const prev = getActivitySummary(name);
+  if (!prev) return errResult(t(lang, "tool.summary_not_found", { name }));
+  // 全量行（maxPoints 取极大值 → stride=1，不抽稀）——重算口径与原管线同源同值的前提
+  const raw = loadRecords(name, { outputDir: OUTPUT_DIR, maxPoints: Number.MAX_SAFE_INTEGER });
+  if (!raw || !raw.points.length) return errResult(t(lang, "tool.records_not_found", { name }));
+  const records = raw.points.map((p) => ({
+    timestamp: p.t,
+    power: p.power,
+    heart_rate: p.heart_rate,
+    cadence: p.cadence,
+    altitude: p.altitude,
+    speed: p.speed,
+    distance: p.distance_m,
+    temperature: p.temperature,
+  }));
+  const rebuilt = rebuildSummaryFromRecords(records, prev, ATHLETE);
+  // category/note 是 activities 列属数据（读取时由 db 层合并回填），不落 summary_json——
+  // prev 取自 getActivitySummary 已合并列值，原样写回会把用户随后清除的备注"复活"
+  delete rebuilt.activity.category;
+  delete rebuilt.activity.note;
+  // 入库 + 注入当日 CTL/ATL/TSB 后终版再入库（两段式，口径同 analyzeFile）
+  upsertActivity(name, rebuilt);
+  const form = computeForm(rebuilt.activity.date);
+  if (form) {
+    Object.assign(rebuilt.athlete_context, form);
+    upsertActivity(name, rebuilt);
+  }
+  // 旧→新对比项（仅记录确实变化的字段，避免结果膨胀；口径同 VoltCoach diffSummaries）
+  const changes = {};
+  const pushChange = (key, a, b) => {
+    if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null))
+      changes[key] = { old: a ?? null, new: b ?? null };
+  };
+  pushChange("tss", prev.power?.tss ?? null, rebuilt.power?.tss ?? null);
+  pushChange("intensity_factor", prev.power?.intensity_factor ?? null, rebuilt.power?.intensity_factor ?? null);
+  pushChange("power_zone_distribution_pct", prev.power?.zone_distribution_pct ?? null, rebuilt.power?.zone_distribution_pct ?? null);
+  pushChange("hr_zone_distribution_pct", prev.heart_rate?.zone_distribution_pct ?? null, rebuilt.heart_rate?.zone_distribution_pct ?? null);
+  pushChange("w_per_kg_avg", prev.power?.w_per_kg_avg ?? null, rebuilt.power?.w_per_kg_avg ?? null);
+  pushChange("ftp_estimate", prev.power?.ftp_estimate ?? null, rebuilt.power?.ftp_estimate ?? null);
+  pushChange("interval_set", prev.interval_set ?? null, rebuilt.interval_set ?? null);
+  pushChange("cadence_power", prev.cadence_power ?? null, rebuilt.cadence_power ?? null);
+  return toResult(
+    {
+      ok: true,
+      file_name: name,
+      date: rebuilt.activity.date,
+      sport: rebuilt.activity.sport,
+      ftp_used: ATHLETE.ftp_watts,
+      max_hr_used: ATHLETE.max_hr,
+      weight_used: ATHLETE.weight_kg,
+      changes,
+      form: form ? { ctl: form.ctl, atl: form.atl, tsb: form.tsb } : null,
+    },
+    lang,
+  );
+}
+
 const TOOL_IMPL = {
   list_activities: toolListActivities,
   get_activity_summary: toolGetActivitySummary,
@@ -471,6 +613,8 @@ const TOOL_IMPL = {
   simulate_form: toolSimulateForm,
   generate_workout: toolGenerateWorkout,
   save_memory: toolSaveMemory,
+  update_ftp: toolUpdateFtp,
+  reanalyze_activity: toolReanalyzeActivity,
 };
 
 /**

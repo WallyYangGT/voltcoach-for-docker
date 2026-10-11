@@ -69,6 +69,15 @@ const DICT = {
     "ftp.ref.0": "Morton 双参数临界功率模型：P(t) = CP + W′/t，由 5min/20min 峰功率解出 CP ≈ FTP",
     "ftp.ref.1": "Coggan & Allen《Training and Racing with a Power Meter》：FTP ≈ 20min 峰功率 × 0.95",
     "ftp.ref.2": "心率交叉验证：全力阈值测试心率峰值应接近 HRmax 高位；功率/心率区间系统性偏移提示 FTP 配置漂移",
+    // ---- AI 自动采纳门槛拒绝原因（tools.js update_ftp / VoltCoach 同步） ----
+    "ftp.apply.no_data": "窗口内没有可用的 FTP 估算（缺少含 20 分钟连续输出的骑行），无法自动更新",
+    "ftp.apply.few_rides": "窗口内有效功率骑行次数不足（需 ≥{min} 次），样本太少不宜自动更新",
+    "ftp.apply.low_confidence": "FTP 估算置信度低（样本不足），不宜自动更新；建议按数据需求清单补充骑行后重试",
+    "ftp.apply.inconsistent": "CP 模型与 Coggan 法估算相差超过 {pct}%，两种方法互斥，估值不可信",
+    "ftp.apply.not_maximal": "20min 峰功率所在骑行的心率未达全力阈值，估值大概率偏低，不宜据此自动更新",
+    "ftp.apply.stale": "最近一次骑行距今天已超过 {n} 天，数据不够新鲜，不宜自动更新",
+    "ftp.apply.no_change": "估算值与当前 FTP 一致，无需更新",
+    "ftp.apply.range": "估算值 {w}W 超出可采纳范围（{lo}–{hi}W）",
 
     // ---- 计划推演（planning.js） ----
     "plan.tsb_recovery": "当前 TSB {tsb} 低于 {thr}，身体未恢复，自动降级为恢复骑",
@@ -183,6 +192,14 @@ const DICT = {
     "ftp.ref.0": "Morton two-parameter critical power model: P(t) = CP + W′/t, CP ≈ FTP solved from 5min/20min peak power",
     "ftp.ref.1": "Coggan & Allen, Training and Racing with a Power Meter: FTP ≈ 20min peak power × 0.95",
     "ftp.ref.2": "HR cross-check: all-out test peak HR should approach HRmax; systematic power/HR zone mismatch hints at FTP drift",
+    "ftp.apply.no_data": "No usable FTP estimate in the window (no ride with 20 continuous minutes of output) — cannot auto-update",
+    "ftp.apply.few_rides": "Too few rides with valid power in the window (need ≥{min}) — sample too thin to auto-update",
+    "ftp.apply.low_confidence": "FTP estimate confidence is low (thin sample) — auto-update not advisable; collect more rides per the data-needs list and retry",
+    "ftp.apply.inconsistent": "CP model and Coggan estimates differ by more than {pct}% — the methods contradict each other, estimate untrustworthy",
+    "ftp.apply.not_maximal": "The ride holding the 20min peak power did not reach the all-out HR threshold — the estimate is likely low, do not auto-update from it",
+    "ftp.apply.stale": "The most recent ride is more than {n} days old — data not fresh enough to auto-update",
+    "ftp.apply.no_change": "The estimate matches the current FTP — no update needed",
+    "ftp.apply.range": "Estimated value {w}W is outside the applicable range ({lo}–{hi}W)",
 
     "plan.tsb_recovery": "Current TSB {tsb} is below {thr} — body not recovered, auto-downgraded to a recovery ride",
     "plan.unknown_type": "Unknown workout type: {target} (options: {opts})",

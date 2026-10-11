@@ -271,3 +271,51 @@ function confidenceNote(c, lang) {
 function methodReferences(lang) {
   return [0, 1, 2].map((i) => t(lang, `ftp.ref.${i}`));
 }
+
+// ---------------- AI 自动采纳门槛（evaluateFtpApply，自 VoltCoach core/ftp.ts 回同步） ----------------
+
+/**
+ * 「AI 教练自动更新 FTP」的采纳门槛（纯函数，从估算结果的结构化字段重新推导）。
+ *
+ * 与 Web 设置页的 UI 门控（仅 confidence === 'high'）刻意不同：置信度口径
+ * 不动（避免牵动两仓同步的估算算法），但在这里按"该警告是否动摇估值本身"重新
+ * 分级——zone_mismatch（功率-心率区间错位）/ drift / hr_coverage 是「当前 FTP 配置
+ * 漂移」的信号、正是该更新的依据，由其降级的 medium 放行；而数据单薄（few_rides
+ * →low）、两法互斥（inconsistent）、锚点明确非全力（not_maximal）才真正不可信，拦下。
+ * 数值始终取估算器输出（调用方不给模型自定数值的入口），工具侧零参。
+ *
+ * @param {object} result estimateFtpFromHistory 的返回
+ * @param {string|null} latestRideDate 窗口内最近一次骑行日期（YYYY-MM-DD；无骑行为 null）
+ * @param {string} today 今日日期（YYYY-MM-DD，调用方注入以便测试）
+ * @param {object} cfg 阈值配置（freshness_days 为 AI 采纳专属门槛）
+ * @returns {{ok: boolean, reason_key: string|null, reason_vars?: object}}
+ */
+export function evaluateFtpApply(result, latestRideDate, today, cfg = FTP_ESTIMATION) {
+  const applyReject = (key, vars) => ({ ok: false, reason_key: key, ...(vars ? { reason_vars: vars } : {}) });
+  const e = result.estimate;
+  if (result.status !== "ok" || !e) return applyReject("ftp.apply.no_data");
+  if (result.sample.usable_power_rides < cfg.min_rides)
+    return applyReject("ftp.apply.few_rides", { min: cfg.min_rides });
+  if (e.confidence === "low") return applyReject("ftp.apply.low_confidence");
+  // 两法互斥：CP 模型可用时与 Coggan 法差超一致性阈值 → 估值本身不可信。
+  // 分母与估算器 consistent 判定同口径（两法取整均值，即 e.ftp_w）
+  const cp = e.methods.cp_model;
+  if (cp && e.ftp_w > 0) {
+    if (Math.abs(cp.ftp_w - e.methods.coggan_20min.ftp_w) / e.ftp_w > cfg.consistency_pct / 100)
+      return applyReject("ftp.apply.inconsistent", { pct: cfg.consistency_pct });
+  }
+  // single_method（缺 5min 峰、仅 Coggan 法）放行：样本量已由 min_rides 把关。
+  // 锚点"明确非全力"（有合格心率且未达全力线）才拦；无心率（null）不拦——
+  // 峰值法只依赖功率，缺心率只是无法交叉验证（estimateFtpFromHistory 同口径）
+  if (e.methods.hr_check.maximal_effort === false) return applyReject("ftp.apply.not_maximal");
+  // 新鲜度：窗口内最近一次骑行距今天 ≤ freshness_days（天数按 UTC 日历日差）
+  if (!latestRideDate) return applyReject("ftp.apply.stale", { n: cfg.freshness_days });
+  const days = Math.round(
+    (Date.parse(today + "T00:00:00Z") - Date.parse(latestRideDate + "T00:00:00Z")) / 86400000,
+  );
+  if (days > cfg.freshness_days) return applyReject("ftp.apply.stale", { n: cfg.freshness_days });
+  if (e.diff_w === 0) return applyReject("ftp.apply.no_change");
+  if (e.ftp_w < cfg.apply_min_w || e.ftp_w > cfg.apply_max_w)
+    return applyReject("ftp.apply.range", { w: e.ftp_w, lo: cfg.apply_min_w, hi: cfg.apply_max_w });
+  return { ok: true, reason_key: null };
+}

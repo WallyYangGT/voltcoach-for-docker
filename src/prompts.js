@@ -60,10 +60,14 @@ const TEXT = {
     "agentic.tool.estimate_ftp": `- estimate_ftp：基于历史骑行估算 FTP（含置信度）`,
     "agentic.tool.simulate_form": `- simulate_form：未来负荷推演——给出逐日计划 TSS，预测 CTL/ATL/TSB 走势与风险（"每周加练会怎样"、赛前减量评估）`,
     "agentic.tool.generate_workout": `- generate_workout：按目标（recovery/endurance/sweet_spot/threshold/vo2max）与可用时长生成单次课表（功率瓦特区间/组数/TSS 估算）`,
+    "agentic.tool.update_ftp": `- update_ftp：按当前最佳科学估算更新用户 FTP 配置（零参，数值来自估算器；内部校验数据量/两法一致性/全力锚点/新鲜度，不满足返回拒绝原因）`,
+    "agentic.tool.reanalyze_activity": `- reanalyze_activity：按当前骑手参数重新分析一次训练并写回（重算 IF/TSS/区间/间歇等，返回新旧对比）——FTP 更新后对受影响训练使用`,
     "agentic.rule.0": `1. 只在上方预装数据不足以回答时才调用工具；能直接回答就不要调用。`,
     "agentic.rule.1": `2. 深挖单次训练时先 list_activities 找到 file_name，再用 get_activity_summary / get_activity_records 按名取数。`,
     "agentic.rule.2": `3. 每轮只发起回答所必需的调用，不要批量试探。`,
     "agentic.rule.3": `4. 需要先调用工具时，中间轮只写简短过渡语；完整结论/报告正文留到不再调用工具的最后一轮一次性输出。`,
+    "agentic.rule.4": `5. FTP 自动更新（update_ftp）：复盘或对话中发现功率-心率区间系统性错位、峰功率与当前 FTP 明显不符等数据偏移迹象时，主动跑 estimate_ftp；门槛满足（置信度足够且数据新鲜）即调用 update_ftp，无需等用户开口。更新成功后必须在回答中明确指出「FTP 已由 X 更新为 Y」及数据依据；被拒绝时向用户转述原因与数据收集建议。用户口头给出的 FTP 数值不要用本工具，引导其到 Web 设置页手动设置。`,
+    "agentic.rule.5": `6. 重新分析（reanalyze_activity）：FTP 更新后可对受影响的训练（如作为估算依据的锚点骑行、用户关心的最近训练）调用，把分析结果对齐新参数；用户要求重新分析某次训练时同样调用。调用后在回答中说明关键指标的变化（旧→新）与对体能序列的影响。`,
 
     "chat.followup": `请基于下面的训练分析报告与训练数据回答后续问题。要求：每次回答控制在 200 字以内；调用工具查询数据的过程不计入回答字数；必须引用本次训练中的具体数据细节（如 NP/IF、分区占比、心率漂移、峰功率、备注等）给出针对性指导，避免泛泛而谈；不要分点罗列。`,
     "chat.direct": `## 回答要求
@@ -179,10 +183,14 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     "agentic.tool.estimate_ftp": `- estimate_ftp: estimate FTP from ride history (with confidence)`,
     "agentic.tool.simulate_form": `- simulate_form: future load simulation — give a daily plan TSS to predict the CTL/ATL/TSB trend and risks ("what if I add X weekly", taper evaluation)`,
     "agentic.tool.generate_workout": `- generate_workout: build a single workout by target (recovery/endurance/sweet_spot/threshold/vo2max) and available time (power watt ranges/sets/TSS estimate)`,
+    "agentic.tool.update_ftp": `- update_ftp: update the user's FTP config from the current best scientific estimate (zero args, value from the estimator; validates data volume/method consistency/all-out anchor/freshness internally, returns the refusal reason when unmet)`,
+    "agentic.tool.reanalyze_activity": `- reanalyze_activity: re-analyze one activity with the current athlete parameters and write it back (recomputes IF/TSS/zones/intervals etc., returns an old-vs-new diff) — use for affected rides after an FTP update`,
     "agentic.rule.0": `1. Only call a tool when the preloaded data above is insufficient; answer directly whenever possible.`,
     "agentic.rule.1": `2. To dig into a single workout, first list_activities to find the file_name, then get_activity_summary / get_activity_records.`,
     "agentic.rule.2": `3. Per round, make only the calls needed to answer — no batch probing.`,
     "agentic.rule.3": `4. When tools are needed first, keep intermediate rounds to a short transition; write the full conclusion/report only in the final round, which makes no tool calls.`,
+    "agentic.rule.4": `5. FTP auto-update (update_ftp): when a review or chat reveals systematic power-HR zone mismatch, peak power clearly inconsistent with the current FTP, or similar drift signals, proactively run estimate_ftp; when the gate passes (confidence sufficient and data fresh) call update_ftp without waiting for the user to ask. After a successful update the reply must state explicitly that "FTP has been updated from X to Y" with the data basis; when refused, relay the reason and data-collection advice. Never use this tool for FTP values the user states verbally — guide them to the Web settings page instead.`,
+    "agentic.rule.5": `6. Re-analysis (reanalyze_activity): after an FTP update, call it for affected rides (e.g. the anchor ride used for estimation, recent rides the user cares about) to align their analysis with the new parameters; also call it when the user asks to re-analyze a ride. In the reply, explain the key metric changes (old vs new) and the impact on the fitness series.`,
 
     "chat.followup": `Answer follow-up questions based on the training analysis report and the training data below. Requirements: keep each answer within 200 characters; tool queries for data do not count toward the limit; cite concrete details from this workout (e.g. NP/IF, zone shares, HR drift, peak power, notes) for targeted guidance — avoid generic advice; do not use bullet lists.`,
     "chat.direct": `## Answer Requirements
@@ -357,10 +365,12 @@ export function buildAgenticSection(lang = "zh") {
     "estimate_ftp",
     "simulate_form",
     "generate_workout",
+    "update_ftp",
+    "reanalyze_activity",
   ]
     .map((name) => TT(lang, `agentic.tool.${name}`))
     .join("\n");
-  const rules = [0, 1, 2, 3].map((i) => TT(lang, `agentic.rule.${i}`)).join("\n");
+  const rules = [0, 1, 2, 3, 4, 5].map((i) => TT(lang, `agentic.rule.${i}`)).join("\n");
   return `${TT(lang, "agentic.head")}
 
 ${TT(lang, "agentic.intro")}

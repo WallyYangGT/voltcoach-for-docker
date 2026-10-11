@@ -21,7 +21,7 @@ import {
   collectDeveloperFields,
   patchTruncatedFitHeader,
 } from "../index.js";
-import { estimateFtpFromHistory } from "../src/ftp.js";
+import { estimateFtpFromHistory, evaluateFtpApply } from "../src/ftp.js";
 import {
   compactSummaryForPrompt,
   localizeTimestamps,
@@ -393,6 +393,127 @@ test("estimateFtpFromHistory: 缺 5min 峰功率时 CP 模型退化，仅用 Cog
   assert.equal(r.estimate.methods.cp_model, null);
   assert.equal(r.estimate.ftp_w, r.estimate.methods.coggan_20min.ftp_w);
   assert.match(r.notes.join("\n"), /CP 模型不可用/);
+});
+
+// ---------------- FTP 自动采纳门槛（evaluateFtpApply，自 VoltCoach unit.test.mjs 同源搬运） ----------------
+
+// 基准估算：threeRides()（窗口 2026-07-01~07-05）→ 高置信、ftp_w=124、diff=+6
+const baseApplyResult = () => estimateFtpFromHistory(threeRides(), FTP_ATHLETE);
+// 无心率数据的骑行（锚点无法判定全力与否 → maximal_effort=null）
+const ridesNoHr = () =>
+  threeRides().map((r) => ({ ...r, summary: { ...r.summary, heart_rate: undefined } }));
+
+test("evaluateFtpApply: 高置信 + 数据新鲜 → 放行", () => {
+  const check = evaluateFtpApply(baseApplyResult(), "2026-07-05", "2026-07-10");
+  assert.deepEqual(check, { ok: true, reason_key: null });
+});
+
+test("evaluateFtpApply: 区间错位（power_above_hr）降级的 medium → 放行（配置漂移正是该更新的信号）", () => {
+  const r = estimateFtpFromHistory(threeRides({ pz: { Z5: 30 }, hz: { Z4: 5 } }), FTP_ATHLETE);
+  assert.equal(r.estimate.confidence, "medium");
+  assert.equal(r.estimate.methods.hr_check.zone_mismatch.direction, "power_above_hr");
+  const check = evaluateFtpApply(r, "2026-07-05", "2026-07-10");
+  assert.deepEqual(check, { ok: true, reason_key: null });
+});
+
+test("evaluateFtpApply: 心率漂移降级的 medium → 放行", () => {
+  const r = estimateFtpFromHistory(threeRides({ drift: 8 }), FTP_ATHLETE);
+  assert.equal(r.estimate.confidence, "medium");
+  assert.deepEqual(evaluateFtpApply(r, "2026-07-05", "2026-07-10"), { ok: true, reason_key: null });
+});
+
+test("evaluateFtpApply: 锚点无心率（maximal_effort=null）→ 不拦（峰值法只依赖功率）", () => {
+  const r = estimateFtpFromHistory(ridesNoHr(), FTP_ATHLETE);
+  assert.equal(r.estimate.methods.hr_check.maximal_effort, null);
+  assert.deepEqual(evaluateFtpApply(r, "2026-07-05", "2026-07-10"), { ok: true, reason_key: null });
+});
+
+test("evaluateFtpApply: 无 20min 峰 → 数据不足拒绝", () => {
+  const check = evaluateFtpApply(
+    estimateFtpFromHistory(threeRides({ p20: null }), FTP_ATHLETE),
+    "2026-07-05",
+    "2026-07-10",
+  );
+  assert.equal(check.ok, false);
+  assert.equal(check.reason_key, "ftp.apply.no_data");
+});
+
+test("evaluateFtpApply: 骑行次数不足 → 拒绝（few_rides 先于 low_confidence）", () => {
+  const check = evaluateFtpApply(
+    estimateFtpFromHistory([mkRide("a.fit", "2026-07-01")], FTP_ATHLETE),
+    "2026-07-01",
+    "2026-07-02",
+  );
+  assert.equal(check.reason_key, "ftp.apply.few_rides");
+  assert.equal(check.reason_vars.min, 3);
+});
+
+test("evaluateFtpApply: 置信度 low → 拒绝", () => {
+  const r = baseApplyResult();
+  r.estimate.confidence = "low";
+  assert.equal(evaluateFtpApply(r, "2026-07-05", "2026-07-10").reason_key, "ftp.apply.low_confidence");
+});
+
+test("evaluateFtpApply: 两法互斥（差超一致性阈值）→ 拒绝（与置信度独立校验）", () => {
+  const r = baseApplyResult(); // confidence=high，但手动拉开 CP 与 Coggan
+  r.estimate.methods.cp_model.ftp_w = 260; // 与 Coggan 124 差 ~110%
+  assert.equal(evaluateFtpApply(r, "2026-07-05", "2026-07-10").reason_key, "ftp.apply.inconsistent");
+});
+
+test("evaluateFtpApply: 锚点明确非全力 → 拒绝（估值只会低估）", () => {
+  const r = estimateFtpFromHistory(threeRides({ hrMax: 150 }), FTP_ATHLETE);
+  assert.equal(r.estimate.methods.hr_check.maximal_effort, false);
+  assert.equal(evaluateFtpApply(r, "2026-07-05", "2026-07-10").reason_key, "ftp.apply.not_maximal");
+});
+
+test("evaluateFtpApply: 新鲜度边界 —— 最近骑行距今 ≤7 天放行、>7 天拒绝、无骑行拒绝", () => {
+  const r = baseApplyResult(); // 窗口内最近一次骑行 2026-07-05
+  assert.deepEqual(evaluateFtpApply(r, "2026-07-05", "2026-07-12"), { ok: true, reason_key: null });
+  const stale = evaluateFtpApply(r, "2026-07-05", "2026-07-13");
+  assert.equal(stale.reason_key, "ftp.apply.stale");
+  assert.equal(stale.reason_vars.n, 7);
+  assert.equal(evaluateFtpApply(r, null, "2026-07-10").reason_key, "ftp.apply.stale");
+});
+
+test("evaluateFtpApply: 估算与当前一致（diff=0）→ 无需更新", () => {
+  const r = estimateFtpFromHistory(threeRides(), { ftp_watts: 124, max_hr: 195 });
+  assert.equal(r.estimate.diff_w, 0);
+  assert.equal(evaluateFtpApply(r, "2026-07-05", "2026-07-10").reason_key, "ftp.apply.no_change");
+});
+
+test("evaluateFtpApply: 单一方法（仅 Coggan）降级的 medium → 放行（样本量已由 min_rides 把关）", () => {
+  const r = estimateFtpFromHistory(threeRides({ p5: null }), FTP_ATHLETE);
+  assert.equal(r.estimate.methods.cp_model, null);
+  assert.equal(r.estimate.confidence, "medium");
+  assert.deepEqual(evaluateFtpApply(r, "2026-07-05", "2026-07-10"), { ok: true, reason_key: null });
+});
+
+test("evaluateFtpApply: 两法一致性分母与估算器同口径（取整均值）", () => {
+  const r = baseApplyResult();
+  // coggan 101 / cp 98：未取整均值 99.5 → 估算器口径取整 100，差 3% 恰在线上判"一致"
+  r.estimate.methods.cp_model.ftp_w = 98;
+  r.estimate.methods.coggan_20min.ftp_w = 101;
+  r.estimate.ftp_w = 100;
+  assert.deepEqual(evaluateFtpApply(r, "2026-07-05", "2026-07-10"), { ok: true, reason_key: null });
+});
+
+test("evaluateFtpApply: 估值超采纳上界 → 拒绝", () => {
+  const r = baseApplyResult();
+  r.estimate.ftp_w = 600;
+  r.estimate.diff_w = 482;
+  assert.equal(evaluateFtpApply(r, "2026-07-05", "2026-07-10").reason_key, "ftp.apply.range");
+});
+
+test("evaluateFtpApply: 估值越采纳范围 → 拒绝", () => {
+  const r = baseApplyResult();
+  r.estimate.ftp_w = 30;
+  r.estimate.diff_w = -94;
+  // 两法同步改为 30/30，避免一致性检查（分母为估值）先于范围检查触发
+  r.estimate.methods.cp_model.ftp_w = 30;
+  r.estimate.methods.coggan_20min.ftp_w = 30;
+  const check = evaluateFtpApply(r, "2026-07-05", "2026-07-10");
+  assert.equal(check.reason_key, "ftp.apply.range");
+  assert.equal(check.reason_vars.w, 30);
 });
 
 // ---------------- prompts.js 提交前数据压缩 ----------------

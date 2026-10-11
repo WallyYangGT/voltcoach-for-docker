@@ -194,7 +194,7 @@ const ATHLETE_LIMITS = {
  * 更新骑手参数（允许只给部分字段）：校验 → 合并当前值写库 → 原地生效。
  * 非法值抛 Error（message 按 lang 双语，Web API 直接透传给前端）。
  */
-export function setAthlete(partial, lang = "zh") {
+export function setAthlete(partial, lang = "zh", opts = null) {
   const updates = {};
   for (const key of Object.keys(ATHLETE_LIMITS)) {
     if (partial?.[key] == null) continue;
@@ -206,7 +206,14 @@ export function setAthlete(partial, lang = "zh") {
   }
   if (!Object.keys(updates).length)
     throw new Error(t(lang, "athlete.none"));
+  // opts.source：FTP 值实际变更时在 athlete JSON 上盖溯源戳（ftp_updated_at/ftp_source），
+  // 供「AI 已代为更新」的追溯（自 VoltCoach 同步）；扩展字段经 syncAthleteFromDb 的
+  // Object.assign 天然保活（不加列、不动表结构）
   const merged = { ...ATHLETE, ...updates };
+  if (updates.ftp_watts != null && updates.ftp_watts !== ATHLETE.ftp_watts) {
+    merged.ftp_updated_at = new Date().toISOString();
+    merged.ftp_source = opts?.source ?? "manual";
+  }
   const db = openDb();
   db.prepare(
     `INSERT INTO settings (key, value) VALUES ('athlete', ?)
@@ -214,6 +221,22 @@ export function setAthlete(partial, lang = "zh") {
   ).run(JSON.stringify(merged));
   Object.assign(ATHLETE, merged); // 原地生效，当前进程无需重启
   return { ...ATHLETE };
+}
+
+/** 读 FTP 溯源戳（athlete 行 JSON 的扩展字段；无行/损坏/旧数据返回全 null，自 VoltCoach 同步） */
+export function getFtpMeta() {
+  const db = openDb();
+  const row = db.prepare(`SELECT value FROM settings WHERE key = 'athlete'`).get();
+  if (!row) return { updated_at: null, source: null };
+  try {
+    const p = JSON.parse(row.value);
+    return {
+      updated_at: typeof p.ftp_updated_at === "string" ? p.ftp_updated_at : null,
+      source: p.ftp_source ?? null,
+    };
+  } catch {
+    return { updated_at: null, source: null };
+  }
 }
 
 // ---------------- AI 服务配置（存 settings 表，Web 设置页维护） ----------------
