@@ -280,3 +280,33 @@ test("开发者字段：自定义字段被统计进 summary", async () => {
     core_temperature: { samples: 1800, avg: 38, min: 38, max: 38 },
   });
 });
+
+test("0W 根治：静止段进 pedal_time 三分解 + stationary 异常标注（数值口径不变）", async () => {
+  // 1200s 骑行：前 900s 踩踏（220W/10m-s），中段 90s 计时未停静止（0W/速度 0），后 210s 踩踏
+  const fit = writeFit(
+    "stationary_ride.fit",
+    gen.buildRideFit({
+      durationSec: 1200,
+      altitude: 100,
+      power: (i) => (i >= 900 && i < 990 ? 0 : 220),
+      speedMS: (i) => (i >= 900 && i < 990 ? 0 : 10),
+    }),
+  );
+  const { summary } = await analyzeFile(fit, outDir);
+  // 三分解：踩踏 1110 / 滑行 0 / 静止 90，分母=全部 1200 秒（逐秒数据无缺口）
+  assert.deepEqual(summary.pedal_time, {
+    sample_sec: 1200,
+    pedaling_sec: 1110,
+    coasting_sec: 0,
+    stationary_sec: 90,
+  });
+  // stationary 异常：一段 90s，at 为静止起始时刻
+  const stationary = (summary.anomalies ?? []).filter((a) => a.type === "stationary");
+  assert.deepEqual(stationary, [
+    { type: "stationary", duration_sec: 90, at: "2024-01-15T10:15:00.000Z" },
+  ]);
+  // 按语言渲染（server 端 formatAnomaly）
+  assert.match(formatAnomaly(stationary[0], "zh"), /计时未停的静止 90s/);
+  // 数值口径不变：NP/TSS 仍计入 0W（与本仓黄金基准同源算法，NP=215 为探针钉值）
+  assert.equal(summary.power.normalized_power, 215);
+});

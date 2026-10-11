@@ -131,6 +131,12 @@ export const DATA_QUALITY = {
   pause_resume_window_sec: 5, // 静止判定窗口（秒）：取恢复记录后该窗口内的最大速度判断
 };
 
+// ============ 踩踏时间分解与静止段标注（index.js：pedalTimeBreakdown/detectStationarySpans） ============
+export const PEDAL_TIME = {
+  stationary_min_sec: 30, // 静止段标注下限（秒）：达到该时长的"计时未停静止"才进 anomalies（短暂红灯不标）
+  stationary_hint_sec: 60, // 详情页踩踏分解面板的静止累计提示线（秒），超过则附「0W 计入指标」披露行
+};
+
 // ============ 功率峰曲线缺口容忍（index.js：fillShortGaps 插值后再算峰功率/FTP 估算） ============
 export const PEAK_CURVE = {
   max_interp_gap_sec: 10, // 允许线性插值补齐的连续缺口上限（秒）：功率计偶发掉几秒不应让 20min 峰功率整体作废；更长缺口仍视为不连续

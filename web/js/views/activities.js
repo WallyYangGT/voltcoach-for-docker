@@ -140,6 +140,7 @@ export async function renderActivityDetail(name) {
     ${segmentsHtml(summary)}
     ${climbsHtml(summary)}
     ${cadencePowerHtml(summary)}
+    ${pedalTimeHtml(summary)}
     ${anomaliesHtml(summary)}
     <div class="panel" id="aiPanel" style="display:none">
       <div class="panel-title">${esc(t("ai.panel"))}</div>
@@ -325,6 +326,27 @@ function cadencePowerHtml(summary) {
     </div>
     ${styleHint ? `<p class="muted" style="margin-top:10px;font-size:13px">${esc(styleHint)}</p>` : ""}
   </div>`;
+}
+
+/**
+ * 踩踏时间分解面板（0W 根治：summary.pedal_time 三分解，与新仓 App 卡同口径）。
+ * 数值口径不变（0W 计入 Z1/负荷），静止累计达提示线（settings.PEDAL_TIME.stationary_hint_sec=60）
+ * 时附披露行；历史 summary 无该字段时整面板隐藏（与 cadencePowerHtml 同守卫模式）。
+ */
+function pedalTimeHtml(summary) {
+  const pt = summary.pedal_time;
+  if (!pt || !pt.sample_sec) return "";
+  const pct = (sec) => Math.round((sec / pt.sample_sec) * 100);
+  const hint =
+    pt.stationary_sec >= 60
+      ? `<p class="muted" style="margin-top:10px;font-size:13px">${esc(t("pedal.stationary_hint", { dur: fmtDur(pt.stationary_sec) }))}</p>`
+      : "";
+  return `<div class="panel"><div class="panel-title">${esc(t("pedal.title"))}</div>
+    <div class="metric-grid" style="margin-bottom:0">
+      ${metricHtml(t("pedal.pedaling"), pct(pt.pedaling_sec) + "%", "", fmtDur(pt.pedaling_sec))}
+      ${metricHtml(t("pedal.coasting"), pct(pt.coasting_sec) + "%", "", fmtDur(pt.coasting_sec))}
+      ${metricHtml(t("pedal.stationary"), pct(pt.stationary_sec) + "%", "", fmtDur(pt.stationary_sec))}
+    </div>${hint}</div>`;
 }
 
 function anomaliesHtml(summary) {

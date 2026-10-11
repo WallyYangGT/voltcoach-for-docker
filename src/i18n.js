@@ -47,6 +47,7 @@ const DICT = {
     "anom.power_gap": "功率缺失 {duration}s，起始 {at}",
     "anom.record_gap": "记录缺失 {duration}s，起始 {at}",
     "anom.timer_pause": "计时暂停 {duration}s，起始 {at}",
+    "anom.stationary": "计时未停的静止 {duration}s，起始 {at}",
     "anom.hr_jump": "心率跳变 {from}→{to}，位于 {at}",
     "anom.other": "{text}",
 
@@ -171,6 +172,7 @@ const DICT = {
     "anom.power_gap": "Power missing {duration}s, starting {at}",
     "anom.record_gap": "Record missing {duration}s, starting {at}",
     "anom.timer_pause": "Timer paused {duration}s, starting {at}",
+    "anom.stationary": "Stationary with the timer running {duration}s, at {at}",
     "anom.hr_jump": "Heart rate jump {from}→{to} at {at}",
     "anom.other": "{text}",
 
@@ -301,6 +303,8 @@ export function formatAnomaly(a, lang) {
       return t(lang, "anom.record_gap", { duration: a.duration_sec, at: a.at });
     case "timer_pause":
       return t(lang, "anom.timer_pause", { duration: a.duration_sec, at: a.at });
+    case "stationary":
+      return t(lang, "anom.stationary", { duration: a.duration_sec, at: a.at });
     case "hr_jump":
       return t(lang, "anom.hr_jump", { from: a.from, to: a.to, at: a.at });
     default:

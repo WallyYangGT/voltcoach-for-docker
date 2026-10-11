@@ -305,7 +305,11 @@ function buildRecords({
     records.push({
       t: badTimestampOffsets.includes(i) ? null : startMs + i * 1000,
       power:
-        power != null && !(powerGap && inSpans(i, [powerGap])) ? power : null,
+        power != null && !(powerGap && inSpans(i, [powerGap]))
+          ? typeof power === "function"
+            ? Math.round(power(i))
+            : power
+          : null,
       heart_rate:
         heartRate != null
           ? typeof heartRate === "function"
@@ -358,7 +362,7 @@ export function buildRideFit(opts = {}) {
       startMs,
       elapsedSec: durationSec,
       distanceM: speedVal != null ? durationSec * speedVal : null,
-      avgPower: power,
+      avgPower: typeof power === "function" ? null : power, // 函数式功率无单一均值，lap 置无效值
       avgHr: 140,
       avgSpeedMS: speedVal,
     }),

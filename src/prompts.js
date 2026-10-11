@@ -40,7 +40,7 @@ const TEXT = {
     "glossary.hr_zones": `心率分区（%最大心率）：`,
     "glossary.hr_zone_line": `  - {name}: {min}–{max} 最大心率`,
     "glossary.data_note.head": `数据口径注意：`,
-    "glossary.data_note.0": `- 功率分区按秒级功率值统计：0W（滑行、下坡、停车但计时未停）也计入 Z1，Z1 占比高不等于没有踩踏输出；`,
+    "glossary.data_note.0": `- 功率分区按秒级功率值统计：0W（滑行、下坡、停车但计时未停）也计入 Z1，Z1 占比高不等于没有踩踏输出；pedal_time 字段给出踩踏/滑行/静止三分解（秒数），可据此量化解释 Z1 占比偏高，anomalies 中 stationary 条目为计时未停的静止段；`,
     "glossary.data_note.1": `- duration_sec 已剔除计时暂停；anomalies 中 timer_pause 条目的 at 为暂停起始时刻，可据此定位暂停发生的环节；`,
     "glossary.data_note.2": `- segments 中 lap 分段的 duration_sec 为含暂停的经过时间，与整体时长口径不同。`,
 
@@ -163,7 +163,7 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     "glossary.hr_zones": `Heart rate zones (%HRmax):`,
     "glossary.hr_zone_line": `  - {name}: {min}–{max} HRmax`,
     "glossary.data_note.head": `Data conventions to note:`,
-    "glossary.data_note.0": `- Power zones are computed from per-second power values: 0 W seconds (coasting, descending, stationary with the timer still running) also count toward Z1 — a high Z1 share does not mean the rider was not pedaling;`,
+    "glossary.data_note.0": `- Power zones are computed from per-second power values: 0 W seconds (coasting, descending, stationary with the timer still running) also count toward Z1 — a high Z1 share does not mean the rider was not pedaling; the pedal_time field breaks the time down into pedaling/coasting/stationary seconds so a high Z1 share can be quantified, and stationary entries in anomalies are stationary spans with the timer running;`,
     "glossary.data_note.1": `- duration_sec excludes timer pauses; the at field of timer_pause entries in anomalies is the pause start time, which locates where each pause happened;`,
     "glossary.data_note.2": `- duration_sec of lap segments in segments is elapsed time including pauses, which differs from the overall duration convention.`,
 

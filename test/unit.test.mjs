@@ -20,6 +20,8 @@ import {
   hrDriftPct,
   collectDeveloperFields,
   patchTruncatedFitHeader,
+  pedalTimeBreakdown,
+  detectStationarySpans,
 } from "../index.js";
 import { estimateFtpFromHistory, evaluateFtpApply } from "../src/ftp.js";
 import {
@@ -29,7 +31,8 @@ import {
   buildReviewPrompt,
 } from "../src/prompts.js";
 import { simulateForm, generateWorkout } from "../src/planning.js";
-import { ATHLETE, FORM_SIMULATION, WORKOUT_TEMPLATES } from "../src/settings.js";
+import { formatAnomaly } from "../src/i18n.js";
+import { ATHLETE, FORM_SIMULATION, WORKOUT_TEMPLATES, DATA_QUALITY } from "../src/settings.js";
 
 // 构造逐秒记录对象的辅助函数
 const rec = (i, fields = {}) => ({
@@ -514,6 +517,84 @@ test("evaluateFtpApply: 估值越采纳范围 → 拒绝", () => {
   const check = evaluateFtpApply(r, "2026-07-05", "2026-07-10");
   assert.equal(check.reason_key, "ftp.apply.range");
   assert.equal(check.reason_vars.w, 30);
+});
+
+// ---------------- 踩踏时间分解与静止段识别（0W 根治：pedal_time 进 summary + stationary 异常） ----------------
+
+/** 逐秒记录夹具（只带分解用到的字段；timestamp 供静止段 at 取值） */
+const psec = (power, speed, i = 0) => ({
+  timestamp: `2026-10-11T00:00:${String(i % 60).padStart(2, "0")}Z`,
+  power,
+  speed,
+});
+
+test("pedalTimeBreakdown: 三桶划分——踩踏 P>0 / 滑行 P=0 且移动 / 静止 P=0 且速度低于暂停阈值", () => {
+  const b = pedalTimeBreakdown([
+    psec(250, 30),
+    psec(0, 25), // 滑行（0W 下坡）
+    psec(0, 0.5), // 静止（计时未停）
+    psec(120, 5),
+  ]);
+  assert.deepEqual(b, { sample_sec: 4, pedaling_sec: 2, coasting_sec: 1, stationary_sec: 1 });
+});
+
+test("pedalTimeBreakdown: 速度阈值边界——speed 恰等于阈值判滑行（≥ 阈值即移动）", () => {
+  const kmh = DATA_QUALITY.pause_resume_speed_kmh;
+  const b = pedalTimeBreakdown([psec(0, kmh), psec(0, kmh - 0.1)]);
+  assert.equal(b.coasting_sec, 1);
+  assert.equal(b.stationary_sec, 1);
+});
+
+test("pedalTimeBreakdown: P=0 且速度缺失判静止（无速度可证仍在移动，向披露侧保守）", () => {
+  const b = pedalTimeBreakdown([psec(0, null), psec(0, null), psec(100, null)]);
+  assert.deepEqual(b, { sample_sec: 3, pedaling_sec: 1, coasting_sec: 0, stationary_sec: 2 });
+});
+
+test("pedalTimeBreakdown: 无功率数据的秒不计入分母（保守口径，同踏频均值剔 0）", () => {
+  const b = pedalTimeBreakdown([psec(null, 30), psec(200, 30), psec(null, 0), psec(0, 0.5)]);
+  assert.deepEqual(b, { sample_sec: 2, pedaling_sec: 1, coasting_sec: 0, stationary_sec: 1 });
+});
+
+test("pedalTimeBreakdown: 全程无功率数据返回 null（summary 装配侧不出键）", () => {
+  assert.equal(pedalTimeBreakdown([psec(null, 10), psec(null, 12)]), null);
+  assert.equal(pedalTimeBreakdown([]), null);
+});
+
+test("detectStationarySpans: 30s 起标、29s 不标（stationary_min_sec 边界）", () => {
+  const short = Array.from({ length: 29 }, (_, i) => psec(0, 0.5, i));
+  const long = Array.from({ length: 30 }, (_, i) => psec(0, 0.5, i));
+  assert.deepEqual(detectStationarySpans(short), []);
+  assert.deepEqual(detectStationarySpans(long), [
+    { type: "stationary", duration_sec: 30, at: "2026-10-11T00:00:00Z" },
+  ]);
+});
+
+test("detectStationarySpans: 踩踏/滑行秒断开静止段；速度缺失计入静止；正常骑行不标", () => {
+  const recs = [
+    ...Array.from({ length: 30 }, (_, i) => psec(0, 0.5, i)), // 静止 30s → 标
+    psec(200, 25, 30), // 踩踏断开
+    ...Array.from({ length: 29 }, (_, i) => psec(0, 0.2, 31 + i)), // 静止 29s → 不标
+    psec(0, 25, 60), // 滑行断开
+    ...Array.from({ length: 31 }, (_, i) => psec(0, null, 61 + i)), // 静止（速度缺失）31s → 标
+  ];
+  const spans = detectStationarySpans(recs);
+  assert.equal(spans.length, 2);
+  assert.equal(spans[0].duration_sec, 30);
+  assert.equal(spans[1].duration_sec, 31);
+  // 夹具 timestamp 按 60s 取模回绕：i=61 → :01
+  assert.equal(spans[1].at, "2026-10-11T00:00:01Z");
+  // 全程正常骑行：无标注
+  assert.deepEqual(
+    detectStationarySpans(Array.from({ length: 120 }, (_, i) => psec(i % 40 ? 200 : 0, 25, i))),
+    [],
+  );
+});
+
+test("formatAnomaly: stationary 按语言渲染（zh/en），旧字符串透传不受影响", () => {
+  const a = { type: "stationary", duration_sec: 90, at: "2026-10-11T00:05:00Z" };
+  assert.equal(formatAnomaly(a, "zh"), "计时未停的静止 90s，起始 2026-10-11T00:05:00Z");
+  assert.equal(formatAnomaly(a, "en"), "Stationary with the timer running 90s, at 2026-10-11T00:05:00Z");
+  assert.equal(formatAnomaly("旧格式字符串", "zh"), "旧格式字符串");
 });
 
 // ---------------- prompts.js 提交前数据压缩 ----------------

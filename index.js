@@ -44,6 +44,7 @@ import {
   DATA_QUALITY,
   ELEVATION,
   PEAK_CURVE,
+  PEDAL_TIME,
 } from "./src/settings.js";
 import { normalizeLang } from "./src/i18n.js";
 
@@ -618,6 +619,62 @@ export function cadencePowerAnalysis(records) {
   };
 }
 
+// ---------------- 踩踏时间分解与静止段识别（0W 根治：进 summary + anomalies 标注） ----------------
+
+/**
+ * 踩踏时间三分解（roadmap「0W/踩踏时间分解」根治的数据侧实现，进 summary 喂 AI）：
+ * 踩踏 = P>0；滑行 = P=0 且速度 ≥ 静止阈值（复用 DATA_QUALITY.pause_resume_speed_kmh，
+ * 同一物理概念「低于该速度即静止」，防两处常量漂移）；静止 = P=0 且速度低于阈值
+ * （含速度缺失——无速度可证仍在移动，向披露侧保守）。无功率数据的秒不计入分母
+ * （保守口径，同踏频均值剔 0）。
+ * 数值口径不变（拍板）：NP/TSS/时长/区间分布仍计入 0W，与码表/Strava/历史可比；
+ * 本字段只做披露，AI 据此可量化解释 Z1 占比偏高。
+ */
+export function pedalTimeBreakdown(records) {
+  let sample = 0;
+  let pedaling = 0;
+  let coasting = 0;
+  let stationary = 0;
+  for (const r of records) {
+    if (r.power == null) continue;
+    sample++;
+    if (r.power > 0) {
+      pedaling++;
+    } else if (r.speed != null && r.speed >= DATA_QUALITY.pause_resume_speed_kmh) {
+      coasting++;
+    } else {
+      stationary++;
+    }
+  }
+  return sample
+    ? { sample_sec: sample, pedaling_sec: pedaling, coasting_sec: coasting, stationary_sec: stationary }
+    : null;
+}
+
+/**
+ * 计时未停的静止段标注：1s 网格上 P=0 且速度低于静止阈值的连续段，时长达到
+ * PEDAL_TIME.stationary_min_sec 才产出 {type:"stationary"} 异常（短暂红灯/起步
+ * 不标注，控制条目噪声）。与暂停/功率缺失判据天然无重叠：暂停=记录空缺、
+ * power_gap=功率缺失，静止=显式 P=0 的有记录秒。
+ */
+export function detectStationarySpans(records) {
+  const threshold = DATA_QUALITY.pause_resume_speed_kmh;
+  const spans = [];
+  let start = -1;
+  for (let i = 0; i <= records.length; i++) {
+    const r = records[i];
+    const isStationary = r != null && r.power === 0 && (r.speed == null || r.speed < threshold);
+    if (isStationary && start < 0) start = i;
+    if (!isStationary && start >= 0) {
+      const duration = i - start;
+      if (duration >= PEDAL_TIME.stationary_min_sec)
+        spans.push({ type: "stationary", duration_sec: duration, at: records[start].timestamp });
+      start = -1;
+    }
+  }
+  return spans;
+}
+
 // ---------------- 单文件分析流程 ----------------
 
 /** 解析一个 FIT 文件，输出 CSV + summary JSON，返回 { csvPath, jsonPath, summary } */
@@ -823,6 +880,8 @@ export async function analyzeFile(input, outDir) {
     else
       anomalies.push({ type: "record_gap", duration_sec: g.duration_sec, at: g.start });
   }
+  // 计时未停的静止段标注（0W 根治：静止以 0W 进入指标的口径不变，但必须显形）
+  anomalies.push(...detectStationarySpans(records));
   // 心率跳变检测（相邻秒差 > 25）
   for (let i = 1; i < records.length; i++) {
     const a = records[i - 1].heart_rate,
@@ -970,6 +1029,8 @@ export async function analyzeFile(input, outDir) {
     developer_fields: collectDeveloperFields(raw),
     // 踏频-功率联合分析是骑行专属口径（阈值按 FTP 设定）
     cadence_power: sport === "cycling" ? cadencePowerAnalysis(records) : null,
+    // 踩踏时间三分解（无功率数据时为 null，随空壳字段清理删键）
+    pedal_time: pedalTimeBreakdown(records),
     climbs: detectClimbs(records),
     interval_set: intervalResult?.interval_set,
     segments: segments.length ? segments : undefined,
