@@ -14,7 +14,7 @@
   "dependencies": {
     "dayjs": "^1.11.23",
     "fflate": "^0.8.3",
-    "fit-file-parser": "^5.2.1",
+    "fit-file-parser": "^6.2.1",
     "marked": "^18.0.6"
   }
 }
