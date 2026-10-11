@@ -30,7 +30,7 @@ export const AI_CONFIG = {
 // ============ Agentic 工具调用参数（ai.js runAgentLoop / tools.js 使用） ============
 export const AGENTIC = {
   max_rounds: 6, // 最大工具调用轮数，超出后强制模型直接作答
-  tool_result_max_chars: 4000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）
+  tool_result_max_chars: 16000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）；2026-10 由 4000 放宽 4×——start_sec/end_sec 窄窗逐秒核对在 4000 下也不可用（60s 全秒窗约 7k 字符），16k ≈ 4-8k tokens，BYOK 模型上下文可承受（自 VoltCoach b1b38d9 回同步）
   records_max_points: 600, // get_activity_records 时序抽稀点数上限
   list_limit: 50, // list_activities 返回条数上限
   form_max_days: 120, // get_form_series 天数上限
