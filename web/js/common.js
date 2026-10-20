@@ -11,7 +11,12 @@ export const $ = (sel, el = document) => el.querySelector(sel);
 export const app = $("#app");
 
 export const esc = (s) =>
-  String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 export async function api(path, opts) {
   const headers = { ...(opts?.headers || {}), "X-Lang": getLang() };
@@ -125,7 +130,7 @@ export const state = {
   overview: null, // /api/overview 缓存
   chartToggles: {}, // 详情页时序图系列开关
   firstRun: false, // 训练库未配置骑手参数（首开引导到设置页）
-  aiThread: null, // 当前 AI 报告追问上下文 { file_name, report_id, chat_id }
+  aiThread: null, // 当前 AI 报告追问上下文 { activity_id, report_id, chat_id }
   chatState: { chatId: null, pollTimer: null }, // 对话页：当前对话 id + 轮询定时器
 };
 
@@ -146,9 +151,11 @@ export function renderAthleteChip(a) {
 
 /** 训练列表行（概览「最近训练」与训练列表页共用） */
 export function actRowHtml(a) {
-  return `<a class="act-row" href="#/activity/${encodeURIComponent(a.file_name)}">
+  // v3：uuid 是对外身份；file_name 仅展示
+  const id = a.uuid || a.activity_id;
+  return `<a class="act-row" href="#/activity/${encodeURIComponent(id)}">
     <span class="act-date">${esc(a.date)}</span>
-    <span class="act-name">${sportBadge(a.sport)}${categoryBadge(a.category)}${esc(a.file_name)}</span>
+    <span class="act-name">${sportBadge(a.sport)}${categoryBadge(a.category)}${esc(a.file_name)}${a.power_flagged ? `<span class="status-badge failed" title="${esc(t("power.flagged_title"))}">${esc(t("power.flagged"))}</span>` : ""}</span>
     <span class="act-stats">
       <span class="act-stat"><span class="v">${fmtDur(a.duration_sec)}</span><br><span class="k">${esc(t("act.duration"))}</span></span>
       <span class="act-stat"><span class="v">${num(a.distance_km, 1)}</span><br><span class="k">km</span></span>

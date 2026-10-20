@@ -43,8 +43,11 @@ async function uploadFiles(files, statusEl) {
         body: buf,
       });
       const s = r.summary;
+      const dupNote = r.duplicate_of
+        ? `<div class="muted" style="font-size:12px">${esc(t("up.duplicate", { name: r.duplicate_of.file_name }))}</div>`
+        : "";
       statusEl.className = "upload-status ok";
-      statusEl.innerHTML = `${esc(t("up.done", { name: f.name, np: s.power?.normalized_power ?? "-", tss: s.power?.tss ?? "-" }))}　<a href="#/activity/${encodeURIComponent(r.file_name)}" style="color:var(--volt)">${esc(t("up.view"))}</a>`;
+      statusEl.innerHTML = `${esc(t("up.done", { name: f.name, np: s.power?.normalized_power ?? "-", tss: s.power?.tss ?? "-" }))}　<a href="#/activity/${encodeURIComponent(r.uuid || r.activity_id)}" style="color:var(--volt)">${esc(t("up.view"))}</a>${dupNote}`;
       state.overview = null; // 让概览下次重新拉取
     } catch (e) {
       statusEl.className = "upload-status err";

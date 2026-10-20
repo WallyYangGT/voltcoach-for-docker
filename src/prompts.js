@@ -17,6 +17,7 @@ import dayjs from "dayjs";
 import "dayjs/locale/zh-cn.js";
 
 import { ATHLETE, POWER_ZONES, HR_ZONES } from "./settings.js";
+import { PEAK_WINDOWS } from "./dossier.js";
 
 // ---------------- 双语静态文本 ----------------
 
@@ -51,23 +52,27 @@ const TEXT = {
     "agentic.head": `## 数据查询与计算工具`,
     "agentic.rules_head": `使用规则：`,
     "agentic.intro": `你可以通过工具调用主动查询本应用训练库中的数据、做负荷推演与课表计算，不必只依赖上方预装的数据。可用工具：`,
-    "agentic.tool.list_activities": `- list_activities：训练简明清单（日期/类型/时长/TSS/NP/IF），可按日期范围/运动类型/分类过滤——这是"目录页"`,
-    "agentic.tool.get_activity_summary": `- get_activity_summary：按 file_name 取单次训练完整汇总指标（NP/IF/TSS/分区/峰功率/心率漂移/备注等）`,
-    "agentic.tool.get_activity_records": `- get_activity_records：按 file_name 取逐秒时序（功率/心率/踏频等），可用 start_sec/end_sec 只取时间窗片段`,
+    "agentic.tool.list_activities": `- list_activities：训练简明清单（日期/类型/时长/TSS/NP/IF，每行带 activity_id），可按日期范围/运动类型/分类过滤——这是"目录页"`,
+    "agentic.tool.get_activity_summary": `- get_activity_summary：按 activity_id 取单次训练完整汇总指标（NP/IF/TSS/分区/峰功率/心率漂移/备注等）`,
+    "agentic.tool.get_activity_records": `- get_activity_records：按 activity_id 取逐秒时序（功率/心率/踏频等），可用 start_sec/end_sec 只取时间窗片段`,
     "agentic.tool.get_form_series": `- get_form_series：最近 N 天逐日 CTL/ATL/TSB（疲劳与状态走势）`,
     "agentic.tool.get_monthly_summary": `- get_monthly_summary：逐月训练汇总（长期负荷趋势）`,
     "agentic.tool.get_athlete_profile": `- get_athlete_profile：骑手参数（FTP/最大心率/体重）与用户身份、训练目标`,
     "agentic.tool.estimate_ftp": `- estimate_ftp：基于历史骑行估算 FTP（含置信度）`,
     "agentic.tool.simulate_form": `- simulate_form：未来负荷推演——给出逐日计划 TSS，预测 CTL/ATL/TSB 走势与风险（"每周加练会怎样"、赛前减量评估）`,
     "agentic.tool.generate_workout": `- generate_workout：按目标（recovery/endurance/sweet_spot/threshold/vo2max）与可用时长生成单次课表（功率瓦特区间/组数/TSS 估算）`,
-    "agentic.tool.update_ftp": `- update_ftp：按当前最佳科学估算更新用户 FTP 配置（零参，数值来自估算器；内部校验数据量/两法一致性/全力锚点/新鲜度，不满足返回拒绝原因）`,
+    "agentic.tool.update_ftp": `- update_ftp：按当前最佳科学估算更新用户 FTP 配置（可选 ftp_watts 在估算区间内自选，夹逼后写入；内部校验数据量/两法一致性/全力锚点/新鲜度，不满足返回拒绝原因）`,
     "agentic.tool.reanalyze_activity": `- reanalyze_activity：按当前骑手参数重新分析一次训练并写回（重算 IF/TSS/区间/间歇等，返回新旧对比）——FTP 更新后对受影响训练使用`,
+    "agentic.tool.get_dossier": `- get_dossier：个人训练档案长期基线（峰功率 PB/近 90 天、爬坡与踏频画像、强度结构、8 周负荷、心率漂移）——评估进步/退步、规划或讨论长期技术策略前先取它作对照`,
+    "agentic.tool.set_power_flag": `- set_power_flag：标记/取消某次骑行「功率不可信」（功率计未校准/读数明显失真）；被标记骑行从档案功率基线排除，可逆`,
+    "agentic.tool.recalibrate_activity_power": `- recalibrate_activity_power：按系数（0.5–1.5）缩放重算单骑全部功率派生指标并写回（系统性校准偏差修正；逐秒原始数据不改写）——拿不准时先 set_power_flag`,
     "agentic.rule.0": `1. 只在上方预装数据不足以回答时才调用工具；能直接回答就不要调用。`,
-    "agentic.rule.1": `2. 深挖单次训练时先 list_activities 找到 file_name，再用 get_activity_summary / get_activity_records 按名取数。`,
+    "agentic.rule.1": `2. 深挖单次训练时先 list_activities 找到 activity_id，再用 get_activity_summary / get_activity_records 按 id 取数。`,
     "agentic.rule.2": `3. 每轮只发起回答所必需的调用，不要批量试探。`,
     "agentic.rule.3": `4. 需要先调用工具时，中间轮只写简短过渡语；完整结论/报告正文留到不再调用工具的最后一轮一次性输出。`,
     "agentic.rule.4": `5. FTP 自动更新（update_ftp）：复盘或对话中发现功率-心率区间系统性错位、峰功率与当前 FTP 明显不符等数据偏移迹象时，主动跑 estimate_ftp；门槛满足（置信度足够且数据新鲜）即调用 update_ftp，无需等用户开口。更新成功后必须在回答中明确指出「FTP 已由 X 更新为 Y」及数据依据；被拒绝时向用户转述原因与数据收集建议。用户口头给出的 FTP 数值不要用本工具，引导其到 Web 设置页手动设置。`,
     "agentic.rule.5": `6. 重新分析（reanalyze_activity）：FTP 更新后可对受影响的训练（如作为估算依据的锚点骑行、用户关心的最近训练）调用，把分析结果对齐新参数；用户要求重新分析某次训练时同样调用。调用后在回答中说明关键指标的变化（旧→新）与对体能序列的影响。`,
+    "agentic.rule.6": `7. 功率可信度：发现功率计未校准/读数明显失真（20min 峰功率无解释突进、功率-心率系统性错位、w/kg 与爬坡表现矛盾）时，先按知识库技能 06 判断；高度可疑先 set_power_flag 标记（可逆），有可信校准依据再 recalibrate_activity_power（系数夹逼 0.5–1.5）。不要凭猜测缩放；被标记骑行的 FTP 估算已自动剔除，不要手工折价。`,
 
     "chat.followup": `请基于下面的训练分析报告与训练数据回答后续问题。要求：每次回答控制在 200 字以内；调用工具查询数据的过程不计入回答字数；必须引用本次训练中的具体数据细节（如 NP/IF、分区占比、心率漂移、峰功率、备注等）给出针对性指导，避免泛泛而谈；不要分点罗列。`,
     "chat.direct": `## 回答要求
@@ -81,12 +86,30 @@ const TEXT = {
     "mem.cat.schedule": `日程`,
     "mem.cat.goal": `目标`,
     "mem.cat.preference": `偏好`,
+    "mem.cat.strategy": `策略`,
+    "mem.tag.short": `短期`,
     "mem.list_intro": `以下是你在此前交互中记录的用户相关事实（按日期排列）：`,
     "mem.empty": `（暂无记忆——这是你第一次积累对用户的了解，请从本次交互开始主动记录。）`,
     "mem.rule.0": `1. 同一主题的记忆相互矛盾时，以日期最新者为准；旧记忆仅作变化轨迹参考，不得忽略其存在。`,
     "mem.rule.1": `2. 主动记录，宁多勿漏：只要用户透露训练数据之外的个人事实或倾向，就立即调用 save_memory 记下，不必等用户明确要求。包括：目标与赛事计划、伤病与身体不适、日程/时间约束、训练偏好（室内/户外、时段、课表类型）、器材、对建议的反馈与纠正、自述的主观状态。训练数据本身已有的事实不要重复记。`,
     "mem.rule.2": `3. 每次回答或报告收尾时回顾一遍本次对话：若有符合第 2 条而尚未记录的信息，补记一条 save_memory（工具调用不影响回答内容）。`,
     "mem.rule.3": `4. 每条记忆 ≤500 字、用中文、写成带主语的完整陈述；同主题更新时用 supersedes_id 取代旧记忆（id 见上方 #标注）。`,
+    "mem.rule.4": `5. 记录时区分时效与类别：仅在本次或近两三周有意义的临时上下文（如出差、临时换器材）用 scope='short'——短期记忆超过两周或 5 次训练后自动失效；长期有效的事实不传 scope（默认长期）；与用户商定的训练策略用 category='strategy'（该类记忆会单独进入「训练策略（既定结论）」权威段）。`,
+    "strat.head": `## 训练策略（既定结论）`,
+    "strat.rules": `以上是用户与教练此前讨论确认的训练策略，是分析与建议的既定前提：涉及相关主题时必须以其为出发点；若本次数据或你的专业判断与既定策略冲突，必须显式指出「这与既定策略不同」并给出数据依据，由用户决定是否修订；确需修订时用 save_memory（category='strategy'，supersedes_id 指向旧策略 id）取代，不得默默按相反的假设分析或给建议。`,
+
+    "dossier.head": `## 个人训练档案（本地自动汇总的长期基线）`,
+    "dossier.baseline": `数据基线：截至 {date}，近 90 天 {considered} 次骑行（{with_power} 次带功率）。以下是与本次训练/规划对照的参考基准：`,
+    "dossier.peak": `- 峰功率（W）历史最佳：{v}`,
+    "dossier.peak.recent": `- 峰功率（W）近 90 天最佳：{v}`,
+    "dossier.climb": `- 爬坡画像（{n} 段中位）：坡度 {g}%、强度 {p}%FTP、心率 {h} bpm`,
+    "dossier.cadence": `- 踏频风格（{m} 次骑行占比）：低踏频 {low}%、正常 {normal}%、高踏频 {high}%`,
+    "dossier.zones": `- 90 天强度结构（按时长加权）：Z1–Z2 {low}%、Z3–Z4 {mid}%、Z5–Z7 {high}%`,
+    "dossier.zones.hr": `- 90 天心率强度结构（功率不可用骑行，按时长加权）：Z1–Z2 {low}%、Z3–Z4 {mid}%、Z5 {high}%（心率五区，单锚点分析用）`,
+    "dossier.types": `- 月度强度类型：{v}`,
+    "dossier.load": `- 近 8 周负荷：周均 TSS {avg}（峰值 {peak}），周均骑行 {hours} 小时`,
+    "dossier.drift": `- 心率漂移中位 {v}%（{n} 次样本，有氧耐力参考）`,
+    "dossier.flagged": `- 功率可信度：{n} 次骑行被标记功率不可信，已从上述功率基线排除；涉及峰功率/强度的纵向对比时请注明该口径`,
 
     "profile.head": `## 用户背景与训练目标`,
     "profile.identity": `身份：{v}`,
@@ -174,23 +197,27 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     "agentic.head": `## Data Query & Computation Tools`,
     "agentic.rules_head": `Rules:`,
     "agentic.intro": `You may proactively query this app's training library, run load simulations, and build workouts through tool calls — you are not limited to the preloaded data above. Available tools:`,
-    "agentic.tool.list_activities": `- list_activities: brief activity list (date/type/duration/TSS/NP/IF) with date range / sport / category filters — the "catalog page"`,
-    "agentic.tool.get_activity_summary": `- get_activity_summary: full summary metrics for one activity by file_name (NP/IF/TSS/zones/peak power/HR drift/notes etc.)`,
-    "agentic.tool.get_activity_records": `- get_activity_records: per-second time series (power/HR/cadence etc.) by file_name, with start_sec/end_sec to fetch only a time window`,
+    "agentic.tool.list_activities": `- list_activities: brief activity list (date/type/duration/TSS/NP/IF, each row carries activity_id) with date range / sport / category filters — the "catalog page"`,
+    "agentic.tool.get_activity_summary": `- get_activity_summary: full summary metrics for one activity by activity_id (NP/IF/TSS/zones/peak power/HR drift/notes etc.)`,
+    "agentic.tool.get_activity_records": `- get_activity_records: per-second time series (power/HR/cadence etc.) by activity_id, with start_sec/end_sec to fetch only a time window`,
     "agentic.tool.get_form_series": `- get_form_series: daily CTL/ATL/TSB for the last N days (fatigue and form trend)`,
     "agentic.tool.get_monthly_summary": `- get_monthly_summary: monthly training summary (long-term load trend)`,
     "agentic.tool.get_athlete_profile": `- get_athlete_profile: athlete parameters (FTP/max HR/weight) plus user identity and training goals`,
     "agentic.tool.estimate_ftp": `- estimate_ftp: estimate FTP from ride history (with confidence)`,
     "agentic.tool.simulate_form": `- simulate_form: future load simulation — give a daily plan TSS to predict the CTL/ATL/TSB trend and risks ("what if I add X weekly", taper evaluation)`,
     "agentic.tool.generate_workout": `- generate_workout: build a single workout by target (recovery/endurance/sweet_spot/threshold/vo2max) and available time (power watt ranges/sets/TSS estimate)`,
-    "agentic.tool.update_ftp": `- update_ftp: update the user's FTP config from the current best scientific estimate (zero args, value from the estimator; validates data volume/method consistency/all-out anchor/freshness internally, returns the refusal reason when unmet)`,
+    "agentic.tool.update_ftp": `- update_ftp: update the user's FTP config from the current best scientific estimate (optional ftp_watts chosen within the estimate range, clamped before writing; validates data volume/method consistency/all-out anchor/freshness internally, returns the refusal reason when unmet)`,
     "agentic.tool.reanalyze_activity": `- reanalyze_activity: re-analyze one activity with the current athlete parameters and write it back (recomputes IF/TSS/zones/intervals etc., returns an old-vs-new diff) — use for affected rides after an FTP update`,
+    "agentic.tool.get_dossier": `- get_dossier: athlete dossier long-term baseline (all-time/90-day peak power, climb and cadence profile, intensity structure, 8-week load, HR drift) — consult before judging progress, planning, or discussing long-term technique strategy`,
+    "agentic.tool.set_power_flag": `- set_power_flag: flag/unflag a ride as power-untrusted (uncalibrated meter or clearly distorted readings); flagged rides are excluded from dossier power baselines and this is reversible`,
+    "agentic.tool.recalibrate_activity_power": `- recalibrate_activity_power: rescale (0.5–1.5) and recompute all power-derived metrics of one ride and write back (systematic calibration offset; raw per-second data unchanged) — when unsure, set_power_flag first`,
     "agentic.rule.0": `1. Only call a tool when the preloaded data above is insufficient; answer directly whenever possible.`,
-    "agentic.rule.1": `2. To dig into a single workout, first list_activities to find the file_name, then get_activity_summary / get_activity_records.`,
+    "agentic.rule.1": `2. To dig into a single workout, first list_activities to find the activity_id, then get_activity_summary / get_activity_records by id.`,
     "agentic.rule.2": `3. Per round, make only the calls needed to answer — no batch probing.`,
     "agentic.rule.3": `4. When tools are needed first, keep intermediate rounds to a short transition; write the full conclusion/report only in the final round, which makes no tool calls.`,
     "agentic.rule.4": `5. FTP auto-update (update_ftp): when a review or chat reveals systematic power-HR zone mismatch, peak power clearly inconsistent with the current FTP, or similar drift signals, proactively run estimate_ftp; when the gate passes (confidence sufficient and data fresh) call update_ftp without waiting for the user to ask. After a successful update the reply must state explicitly that "FTP has been updated from X to Y" with the data basis; when refused, relay the reason and data-collection advice. Never use this tool for FTP values the user states verbally — guide them to the Web settings page instead.`,
     "agentic.rule.5": `6. Re-analysis (reanalyze_activity): after an FTP update, call it for affected rides (e.g. the anchor ride used for estimation, recent rides the user cares about) to align their analysis with the new parameters; also call it when the user asks to re-analyze a ride. In the reply, explain the key metric changes (old vs new) and the impact on the fitness series.`,
+    "agentic.rule.6": `7. Power credibility: when the meter is uncalibrated or readings are clearly distorted (unexplained 20-min peak jump, systematic power-HR mismatch, w/kg contradicting climbing), judge per skill 06; when highly suspect call set_power_flag first (reversible), and only recalibrate_activity_power with a credible basis (factor clamped 0.5–1.5). Never rescale on a guess; flagged rides are already excluded from FTP estimation — do not discount estimates manually.`,
 
     "chat.followup": `Answer follow-up questions based on the training analysis report and the training data below. Requirements: keep each answer within 200 characters; tool queries for data do not count toward the limit; cite concrete details from this workout (e.g. NP/IF, zone shares, HR drift, peak power, notes) for targeted guidance — avoid generic advice; do not use bullet lists.`,
     "chat.direct": `## Answer Requirements
@@ -204,12 +231,30 @@ You are the user's personal AI training advisor. Answer pragmatically and concis
     "mem.cat.schedule": `Schedule`,
     "mem.cat.goal": `Goal`,
     "mem.cat.preference": `Preference`,
+    "mem.cat.strategy": `Strategy`,
+    "mem.tag.short": `short-term`,
     "mem.list_intro": `Facts about the user recorded in earlier interactions (chronological):`,
     "mem.empty": `(No memories yet — this is your first time building a picture of the user; start recording proactively from this interaction.)`,
     "mem.rule.0": `1. When memories about the same topic conflict, the newest date wins; older memories remain reference points in the change history — do not ignore their existence.`,
     "mem.rule.1": `2. Record proactively — better too many than too few: whenever the user reveals personal facts or preferences beyond training data, call save_memory immediately rather than waiting to be asked. This includes: goals and race plans, injuries or physical issues, schedule/time constraints, training preferences (indoor/outdoor, time of day, workout types), equipment, feedback on and corrections to your advice, self-reported subjective state. Facts already present in the training data need not be re-recorded.`,
     "mem.rule.2": `3. At the end of each answer or report, review this conversation: if anything per rule 2 is not yet recorded, add one save_memory call (tool calls do not affect answer content).`,
     "mem.rule.3": `4. Each memory ≤500 characters, written in the user's current language as a complete statement with a subject; when updating the same topic, supersede the old memory via supersedes_id (ids are the #annotations above).`,
+    "mem.rule.4": `5. Distinguish freshness and kind when recording: temporary context meaningful only for this or the next couple of weeks (travel, temporary equipment swap) uses scope='short' — short-term memories auto-expire after two weeks or 5 activities, whichever comes first; long-lived facts take no scope (long by default); training strategies agreed with the user use category='strategy' (rendered separately in the "Training Strategies (Agreed Conclusions)" authoritative block).`,
+    "strat.head": `## Training Strategies (Agreed Conclusions)`,
+    "strat.rules": `The above are training strategies previously agreed between user and coach — the standing premises for analysis and advice: treat them as the starting point for related topics; if today's data or your professional judgment conflicts with an agreed strategy, you must explicitly flag "this differs from the agreed strategy" with data-backed reasoning and let the user decide on any revision; to revise, supersede via save_memory (category='strategy', supersedes_id pointing at the old strategy id). Never silently analyze or advise against an agreed strategy.`,
+
+    "dossier.head": `## Athlete Dossier (local deterministic long-term baseline)`,
+    "dossier.baseline": `Data baseline: as of {date}, {considered} rides in the last 90 days ({with_power} with power). Reference baselines for this session/plan:`,
+    "dossier.peak": `- Peak power (W) all-time best: {v}`,
+    "dossier.peak.recent": `- Peak power (W) best in last 90 days: {v}`,
+    "dossier.climb": `- Climb profile ({n} climbs, medians): grade {g}%, intensity {p}%FTP, HR {h} bpm`,
+    "dossier.cadence": `- Cadence style ({m} rides): low {low}%, normal {normal}%, high {high}%`,
+    "dossier.zones": `- 90-day intensity structure (duration-weighted): Z1–Z2 {low}%, Z3–Z4 {mid}%, Z5–Z7 {high}%`,
+    "dossier.zones.hr": `- 90-day HR intensity structure (power-unusable rides, duration-weighted): Z1–Z2 {low}%, Z3–Z4 {mid}%, Z5 {high}% (5 HR zones, for single-anchor analysis)`,
+    "dossier.types": `- Monthly intensity types: {v}`,
+    "dossier.load": `- Last 8 weeks: avg TSS {avg} (peak {peak}), avg {hours} h/week`,
+    "dossier.drift": `- Median HR drift {v}% ({n} samples, aerobic reference)`,
+    "dossier.flagged": `- Power credibility: {n} rides flagged power-untrusted and excluded from the power baselines above; note this when comparing peak power/intensity longitudinally`,
 
     "profile.head": `## User Background & Training Goals`,
     "profile.identity": `Identity: {v}`,
@@ -367,10 +412,13 @@ export function buildAgenticSection(lang = "zh") {
     "generate_workout",
     "update_ftp",
     "reanalyze_activity",
+    "get_dossier",
+    "set_power_flag",
+    "recalibrate_activity_power",
   ]
     .map((name) => TT(lang, `agentic.tool.${name}`))
     .join("\n");
-  const rules = [0, 1, 2, 3, 4, 5].map((i) => TT(lang, `agentic.rule.${i}`)).join("\n");
+  const rules = [0, 1, 2, 3, 4, 5, 6].map((i) => TT(lang, `agentic.rule.${i}`)).join("\n");
   return `${TT(lang, "agentic.head")}
 
 ${TT(lang, "agentic.intro")}
@@ -401,33 +449,163 @@ export function buildChatInstruction(mode, lang = "zh") {
 export function buildMemorySection(memories, lang = "zh") {
   const catLabel = (c) =>
     TT(lang, `mem.cat.${c}`) || c || TT(lang, "mem.cat.general");
-  const lines = [...(memories ?? [])].reverse().map((m) => {
+  const all = [...(memories ?? [])].reverse();
+  // category='strategy' 单独进「既定结论」权威段并置顶（分析与建议的前提）
+  const strategies = all.filter((m) => m.category === "strategy");
+  const rest = all.filter((m) => m.category !== "strategy");
+  const strategyBlock = strategies.length
+    ? `${TT(lang, "strat.head")}\n\n${strategies
+        .map((m) => {
+          const date = String(m.created_at ?? "").slice(0, 10);
+          return `- [${date}] (#${m.id}) ${m.content}`;
+        })
+        .join("\n")}\n\n${TT(lang, "strat.rules")}`
+    : null;
+  const lines = rest.map((m) => {
     const date = String(m.created_at ?? "").slice(0, 10);
     const cat = catLabel(m.category);
-    return `- [${date}] (#${m.id}, ${cat}) ${m.content}`;
+    const scopeTag = m.scope === "short" ? `, ${TT(lang, "mem.tag.short")}` : "";
+    return `- [${date}] (#${m.id}, ${cat}${scopeTag}) ${m.content}`;
   });
   const list = lines.length
     ? `${TT(lang, "mem.list_intro")}\n${lines.join("\n")}`
     : TT(lang, "mem.empty");
-  return `${TT(lang, "mem.head")}
+  const memBlock = `${TT(lang, "mem.head")}
 
 ${list}
 
 ${TT(lang, "mem.rules_head")}
-${[0, 1, 2, 3].map((i) => TT(lang, `mem.rule.${i}`)).join("\n")}`;
+${[0, 1, 2, 3, 4].map((i) => TT(lang, `mem.rule.${i}`)).join("\n")}`;
+  return [strategyBlock, memBlock].filter(Boolean).join("\n\n");
 }
 
 /**
- * 统一拼装：角色 + 口径 + 当前时间 + 专业知识库（可选）+ 用户背景（可选）+ 各数据段 + 问题清单。
+ * 个人训练档案段（src/dossier.js 聚合的长期基线，语言中立数据 → 按语言渲染）。
+ * dossier 为 null（无骑行数据）返回 null 整段省略；段内各数据行按有无数据
+ * 独立省略（如库中尚无带功率骑行则无峰功率行）。四场景报告与对话/追问均注入。
+ */
+export function buildDossierSection(dossier, lang = "zh") {
+  if (!dossier) return null;
+  const lines = [];
+
+  const fmtPeaks = (es) => {
+    const byWindow = new Map((es ?? []).map((e) => [e.window, e.value_w]));
+    // 四窗口固定输出、缺项用 —（让模型明确知道哪些窗口没有数据，而不是误以为已列全）
+    return PEAK_WINDOWS.map((w) => `${w} ${byWindow.get(w) ?? "—"}`).join(" / ");
+  };
+  if (dossier.peak_power?.all_time?.length) {
+    lines.push(TT(lang, "dossier.peak", { v: fmtPeaks(dossier.peak_power.all_time) }));
+    if (dossier.peak_power.last_90d?.length)
+      lines.push(TT(lang, "dossier.peak.recent", { v: fmtPeaks(dossier.peak_power.last_90d) }));
+  }
+  const cp = dossier.climb_profile;
+  if (cp?.climbs_analyzed > 0) {
+    lines.push(
+      TT(lang, "dossier.climb", {
+        n: cp.climbs_analyzed,
+        g: cp.median_grade_pct ?? "—",
+        p: cp.median_pct_ftp ?? "—",
+        h: cp.median_avg_hr ?? "—",
+      }),
+    );
+  }
+  const cad = dossier.cadence_profile;
+  if (cad?.rides_analyzed > 0) {
+    const total = cad.style_counts.low + cad.style_counts.normal + cad.style_counts.high;
+    const pct = (x) => (total ? Math.round((x / total) * 1000) / 10 : 0);
+    lines.push(
+      TT(lang, "dossier.cadence", {
+        m: cad.rides_analyzed,
+        low: pct(cad.style_counts.low),
+        normal: pct(cad.style_counts.normal),
+        high: pct(cad.style_counts.high),
+      }),
+    );
+  }
+  const zp = dossier.intensity_structure?.zone_pct;
+  if (zp) {
+    const r1 = (x) => Math.round(x * 10) / 10;
+    lines.push(
+      TT(lang, "dossier.zones", {
+        low: r1((zp.Z1 ?? 0) + (zp.Z2 ?? 0)),
+        mid: r1((zp.Z3 ?? 0) + (zp.Z4 ?? 0)),
+        high: r1((zp.Z5 ?? 0) + (zp.Z6 ?? 0) + (zp.Z7 ?? 0)),
+      }),
+    );
+  }
+  // 单锚点降级基线：功率不可用骑行的心率分区结构（无功率骑手的主要强度依据）
+  const hzp = dossier.intensity_structure?.hr_zone_pct;
+  if (hzp) {
+    const r1 = (x) => Math.round(x * 10) / 10;
+    lines.push(
+      TT(lang, "dossier.zones.hr", {
+        low: r1((hzp.Z1 ?? 0) + (hzp.Z2 ?? 0)),
+        mid: r1((hzp.Z3 ?? 0) + (hzp.Z4 ?? 0)),
+        high: r1(hzp.Z5 ?? 0),
+      }),
+    );
+  }
+  if (dossier.intensity_structure?.intensity_types?.length) {
+    const joiner = lang === "en" ? ", " : "、";
+    lines.push(
+      TT(lang, "dossier.types", {
+        v: dossier.intensity_structure.intensity_types
+          .map((m) => `${m.month} ${m.type}`)
+          .join(joiner),
+      }),
+    );
+  }
+  const weeks = dossier.load_shape?.weeks ?? [];
+  const totalRides = weeks.reduce((a, w) => a + w.rides, 0);
+  if (totalRides > 0) {
+    lines.push(
+      TT(lang, "dossier.load", {
+        avg: Math.round(weeks.reduce((a, w) => a + w.tss, 0) / weeks.length),
+        peak: Math.max(...weeks.map((w) => w.tss)),
+        hours:
+          Math.round(
+            (weeks.reduce((a, w) => a + w.duration_sec, 0) / weeks.length / 3600) * 10,
+          ) / 10,
+      }),
+    );
+  }
+  const hd = dossier.load_shape?.hr_drift;
+  if (hd?.median_pct != null) {
+    lines.push(TT(lang, "dossier.drift", { v: hd.median_pct, n: hd.rides }));
+  }
+  if (dossier.cycling?.total_flagged > 0) {
+    lines.push(TT(lang, "dossier.flagged", { n: dossier.cycling.total_flagged }));
+  }
+
+  return `${TT(lang, "dossier.head")}
+
+${TT(lang, "dossier.baseline", {
+    date: dossier.anchor_date ?? "—",
+    considered: dossier.cycling?.considered ?? 0,
+    with_power: dossier.cycling?.with_power ?? 0,
+  })}
+${lines.join("\n")}`;
+}
+
+/**
+ * 统一拼装：角色 + 口径 + 当前时间 + 专业知识库（可选）+ 用户背景（可选）+
+ * 训练档案（可选）+ 各数据段 + 问题清单。
  * skills 为 src/skills.js buildSkillsSection() 的输出，仅服务端 AI 调用注入
  * （CLI 提示词命令不传，保持原样）；
- * now 为当前时刻（buildDateSection 用，非法时该段省略）。
+ * now 为当前时刻（buildDateSection 用，非法时该段省略）；
+ * dossierSection 为 buildDossierSection 输出（可空）。
  */
-function assemble(dataSections, questions, profile, skills, lang, now) {
+function assemble(dataSections, questions, profile, skills, lang, now, dossierSection = null) {
   return [
     lang === "en" ? TEXT.en.role : ROLE,
     buildMetricGlossary(lang),
-    ...[buildDateSection(now, lang), skills, buildProfileSection(profile, lang), ...dataSections].filter(Boolean),
+    ...[
+      buildDateSection(now, lang),
+      skills,
+      buildProfileSection(profile, lang),
+      dossierSection,
+      ...dataSections,
+    ].filter(Boolean),
     `${TT(lang, "answer.head")}\n\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}`,
   ].join("\n\n");
 }
@@ -587,7 +765,14 @@ function categoryName(cat, lang) {
  * lang 为提示词语言（zh/en，默认 zh）；
  * now 为当前时刻（可注入固定值便于测试，缺省当前时间）。
  */
-export function buildReviewPrompt(summary, profile, skills, lang = "zh", now = new Date()) {
+export function buildReviewPrompt(
+  summary,
+  profile,
+  skills,
+  lang = "zh",
+  now = new Date(),
+  dossierSection = null,
+) {
   const catName = categoryName(summary?.activity?.category, lang);
   const note = String(summary?.activity?.note ?? "").trim();
   return assemble(
@@ -610,6 +795,7 @@ export function buildReviewPrompt(summary, profile, skills, lang = "zh", now = n
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 
@@ -627,6 +813,7 @@ export function buildPlanPrompt(
   skills,
   lang = "zh",
   now = new Date(),
+  dossierSection = null,
 ) {
   return assemble(
     [
@@ -639,6 +826,7 @@ export function buildPlanPrompt(
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 
@@ -656,6 +844,7 @@ export function buildTaperPrompt(
   skills,
   lang = "zh",
   now = new Date(),
+  dossierSection = null,
 ) {
   return assemble(
     [
@@ -669,6 +858,7 @@ export function buildTaperPrompt(
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 
@@ -679,7 +869,15 @@ export function buildTaperPrompt(
  * lang 为提示词语言（zh/en，默认 zh）；
  * now 为当前时刻（可注入固定值便于测试，缺省当前时间）。
  */
-export function buildComparePrompt(summaryA, summaryB, profile, skills, lang = "zh", now = new Date()) {
+export function buildComparePrompt(
+  summaryA,
+  summaryB,
+  profile,
+  skills,
+  lang = "zh",
+  now = new Date(),
+  dossierSection = null,
+) {
   const dateA = summaryA.activity?.date ?? "未知日期";
   const dateB = summaryB.activity?.date ?? "未知日期";
   return assemble(
@@ -692,6 +890,7 @@ export function buildComparePrompt(summaryA, summaryB, profile, skills, lang = "
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 

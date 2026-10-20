@@ -11,7 +11,7 @@ export async function renderAI() {
   app.innerHTML = `<div class="empty loading">${esc(t("common.loading"))}</div>`;
   const ov = await loadOverview();
   const opts = (ov.activities || [])
-    .map((a) => `<option value="${esc(a.file_name)}">${esc(a.date)} · ${esc(sportLabel(a.sport))} · ${esc(trunc(a.file_name))}</option>`)
+    .map((a) => `<option value="${esc(a.uuid || a.activity_id)}">${esc(a.date)} · ${esc(sportLabel(a.sport))} · ${esc(trunc(a.file_name))}</option>`)
     .join("");
   const aiInfo = ov.ai || {};
   const cfgNote = aiInfo.configured
@@ -66,7 +66,7 @@ export async function renderAI() {
     </div>`;
 
   $("#btnAiReview").addEventListener("click", () =>
-    runAi({ mode: "review", file_name: $("#aiReviewSel").value }, $("#aiPanel"), $("#aiBody")));
+    runAi({ mode: "review", activity_id: $("#aiReviewSel").value }, $("#aiPanel"), $("#aiBody")));
   $("#btnAiPlan").addEventListener("click", () =>
     runAi({ mode: "plan" }, $("#aiPanel"), $("#aiBody")));
   $("#btnAiTaper").addEventListener("click", () => {
@@ -75,7 +75,7 @@ export async function renderAI() {
     runAi({ mode: "taper", race_date: d }, $("#aiPanel"), $("#aiBody"));
   });
   $("#btnAiCompare").addEventListener("click", () =>
-    runAi({ mode: "compare", file_name: $("#aiCmpA").value, compare_with: $("#aiCmpB").value }, $("#aiPanel"), $("#aiBody")));
+    runAi({ mode: "compare", activity_id: $("#aiCmpA").value, compare_id: $("#aiCmpB").value }, $("#aiPanel"), $("#aiBody")));
   $("#aiReportMode").addEventListener("change", () =>
     loadReportList($("#aiReportList"), $("#aiReportMode").value));
   await loadReportList($("#aiReportList"));

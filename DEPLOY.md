@@ -41,6 +41,10 @@ http://localhost:3000
 
 如需改宿主机端口，调整 `docker-compose.yml` 里的端口映射（容器内部端口固定 3000；也可用环境变量 `PORT` 改容器内端口）。
 
+> **监听地址**：直接 `npm run web` 时服务默认只监听 `127.0.0.1`（纯本机使用）；Docker 镜像已设 `HOST=0.0.0.0` 供端口映射。若裸机部署需要局域网访问，请显式设 `HOST=0.0.0.0`（同网段任意主机可访问删除/合并等接口，注意网络边界）。
+>
+> **导出备份**：`node index.js --export [输出目录]` 现在按 `FIT_DB_PATH` / `FIT_OUTPUT_DIR` 读取训练库与逐秒数据（Docker 内为 `/app/db/fitness.db` 与 `/output`），容器内可直接 `docker exec <容器> node index.js --export /output`。
+
 ### 停止与重启
 
 ```bash

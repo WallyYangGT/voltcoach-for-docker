@@ -244,7 +244,8 @@ records/             # 每活动一个 gzip 压缩的逐秒数据（从 CSV 改�
 
 - 理由：构建体系（npm → Expo/Metro）、测试框架、目录结构完全不同，混在一个 repo 会互相干扰；各自独立演进最干净。
 - 做法：`npx create-expo-app` 起骨架 → 把 `src/core`、`src/prompts`、`skills/`、`test/unit.test.mjs` 逐个**复制**过来（保留文件头注释，标注来源 commit），边搬边补 TS 类型；两 repo 的 README 互相引用。
-- **口径同步约定（并行维护的核心纪律）**：两边共享一份算法/提示词/技能拷贝（src/core、src/prompts、skills/），口径变更（阈值调整、指标 bug 修复、提示词改进）必须双向同步。建议固定方向：**算法与提示词改动先落在旧 repo**（node:test 回归体系最成熟、可用真实数据快速验证），验证通过后同步到新 repo，同步 commit 标注来源 commit；纯 UI/平台相关改动各自独立。长期若同步成本显著，再评估抽共享 npm 包（workspace/private registry）。
+- **口径同步约定（2026-10-20 已翻转，优先于本节历史表述）**：自 VoltCoach decisions §16 D8 / 评审 A6 起，**新 repo（安卓 App，WallyYangGT/voltcoach）是算法、提示词、技能与数据口径的唯一权威**，旧 repo（voltcoach-for-docker）是下游：口径变更先在主仓落地并验证，旧仓随下次发版回同步（同步 commit 标注来源 commit）。本节原「算法与提示词改动先落在旧 repo」的固定方向**已失效**，仅作历史记录保留。纯 UI/平台相关改动各自独立；长期若同步成本显著，再评估抽共享 npm 包（workspace/private registry）。
+- **2026-10-20 回同步批**：旧仓已升级 schema v3（活动 uuid 身份、records uuid 命名、外键/孤儿重挂、备份 v3 导出）与 v2（个人训练档案、记忆分层、功率可信度、编号迁移机制）。旧仓仍不具备主仓后续能力（训练计划、上下文装配器、业余教练模式等），详见旧仓 `AGENTS.md`「双仓关系与权威方向」。
 - **数据互通**：原始 `.fit` 文件是 source of truth——两版都是"导入 FIT → 衍生分析"，跨版本不需要同步衍生数据，保留好原始文件集即可在任一版本重放分析；手填数据（备注/分类/记忆/骑手参数）是唯一会分叉的部分，量小，并行期以单侧录入为主，必要时走 §7 备份包搬运。
 - 旧 repo 补 `--export` 命令（§7.3）用于把历史库导入 App。
 

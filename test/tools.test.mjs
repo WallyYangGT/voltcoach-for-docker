@@ -24,9 +24,19 @@ const { buildRideFit } = await import("./make_test_fit.mjs");
 const { analyzeFile } = await import("../index.js");
 const { executeTool } = await import("../src/tools.js");
 const { AGENTIC } = await import("../src/settings.js");
-const { closeDb, upsertActivity, getActivitySummary, setAthlete, getFtpMeta } = await import("../src/db.js");
+const {
+  closeDb,
+  insertActivity,
+  updateActivitySummary,
+  resolveActivityUuid,
+  getActivitySummary,
+  setAthlete,
+  getFtpMeta,
+} = await import("../src/db.js");
+const { rideFingerprint } = await import("../src/dedupe.js");
 
 const RIDE_NAME = "tools_window_ride.fit";
+const RIDE_ID = () => resolveActivityUuid(RIDE_NAME);
 
 before(async () => {
   // 60 秒全秒数据（< records_max_points 抽稀线 → 工具侧不抽稀、全量返回）
@@ -43,7 +53,7 @@ after(() => {
 test("get_activity_records：60s 全秒窄窗不截断（逐秒核对暂停时刻的可用性，截断放宽回归）", async () => {
   const raw = await executeTool(
     "get_activity_records",
-    { file_name: RIDE_NAME, start_sec: 0, end_sec: 59 },
+    { activity_id: RIDE_ID(), start_sec: 0, end_sec: 59 },
     { lang: "zh" },
   );
   assert.ok(raw.length > 4000, "60s 全秒窗应超旧 4000 上限（证明放宽实际生效），实测 " + raw.length);
@@ -60,7 +70,7 @@ function daysAgo(n) {
   return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 }
 function seedRide(name, date) {
-  upsertActivity(name, {
+  const summary = {
     activity: {
       date,
       sport: "cycling",
@@ -88,6 +98,16 @@ function seedRide(name, date) {
       zone_distribution_pct: { Z1: 60, Z2: 20, Z3: 10, Z4: 5, Z5: 0 },
     },
     data_quality: { power_coverage_pct: 100, hr_coverage_pct: 100 },
+  };
+  return insertActivity({
+    fileName: name,
+    source: "test",
+    fingerprint: rideFingerprint({
+      date,
+      duration_sec: 3600,
+      distance_km: 30,
+    }),
+    summary,
   });
 }
 
@@ -119,43 +139,115 @@ test("update_ftp：三骑高置信 + 数据新鲜 → 放行写回，数值来�
   assert.match(again.reason, /无需更新/);
 });
 
-test("reanalyze_activity：file_name 校验/缺失拒绝；FTP 变更后重算写回并返回新旧对比", async () => {
-  // 不存在 / 路径穿越
-  const missing = JSON.parse(await executeTool("reanalyze_activity", { file_name: "x.fit" }, { lang: "zh" }));
+test("update_ftp：可选 ftp_watts 在估算区间内自选；越界夹逼到区间边界", async () => {
+  // 上一测试已把 FTP 写成 124，先回 106 以制造可写差值
+  setAthlete({ ftp_watts: 106 }, "zh");
+  const parsed = JSON.parse(
+    await executeTool("update_ftp", { ftp_watts: 500 }, { lang: "zh" }),
+  );
+  assert.equal(parsed.applied, true);
+  assert.equal(parsed.requested_w, 500);
+  assert.equal(parsed.clamped, true);
+  assert.equal(parsed.new_ftp_w, parsed.estimate.range_high);
+  assert.ok(parsed.new_ftp_w <= parsed.estimate.range_high);
+});
+
+test("reanalyze_activity：activity_id 校验/缺失拒绝；FTP 变更后重算写回并返回新旧对比", async () => {
+  // 不存在 / 非法活动 id
+  const missing = JSON.parse(
+    await executeTool("reanalyze_activity", { activity_id: "f".repeat(32) }, { lang: "zh" }),
+  );
   assert.match(missing.error, /找不到/);
-  const evil = JSON.parse(await executeTool("reanalyze_activity", { file_name: "../etc/passwd" }, { lang: "zh" }));
-  assert.match(evil.error, /非法/);
+  const evil = JSON.parse(
+    await executeTool("reanalyze_activity", { activity_id: "../etc/passwd" }, { lang: "zh" }),
+  );
+  assert.match(evil.error, /activity_id/);
 
   // 60s 骑行入库于出厂 FTP 106；update_ftp 放行测试已把 FTP 写成 124 → 重算必有数值变化
-  const prev = getActivitySummary(RIDE_NAME);
-  const raw = await executeTool("reanalyze_activity", { file_name: RIDE_NAME }, { lang: "zh" });
+  const id = RIDE_ID();
+  const prev = getActivitySummary(id);
+  const raw = await executeTool("reanalyze_activity", { activity_id: id }, { lang: "zh" });
   const parsed = JSON.parse(raw);
   assert.equal(parsed.ok, true);
+  assert.equal(parsed.activity_id, id);
   assert.equal(parsed.file_name, RIDE_NAME);
   assert.equal(parsed.ftp_used, 124);
   assert.equal(parsed.changes.tss.old, prev.power.tss);
   assert.notEqual(parsed.changes.tss.new, prev.power.tss);
   assert.ok(parsed.changes.intensity_factor);
   // 写回生效：库内 tss 与对比项一致
-  const after = getActivitySummary(RIDE_NAME);
+  const after = getActivitySummary(id);
   assert.equal(after.power.tss, parsed.changes.tss.new);
   assert.equal(after.athlete_context.ftp_watts, 124);
   // 当日 CTL/ATL/TSB 两段式注入
   assert.ok(parsed.form && Number.isFinite(parsed.form.ctl));
 
   // 存量行回填（0W 根治）：剥掉 pedal_time/stationary 后重算 → 按 records 补回
-  const legacy = JSON.parse(JSON.stringify(getActivitySummary(RIDE_NAME)));
+  const legacy = JSON.parse(JSON.stringify(getActivitySummary(id)));
   delete legacy.pedal_time;
+  delete legacy.activity.category;
+  delete legacy.activity.note;
+  delete legacy.activity.power_flagged;
   legacy.anomalies = (legacy.anomalies ?? []).filter((a) => a.type !== "stationary");
-  upsertActivity(RIDE_NAME, legacy);
+  updateActivitySummary(id, legacy);
   const backfilled = JSON.parse(
-    await executeTool("reanalyze_activity", { file_name: RIDE_NAME }, { lang: "zh" }),
+    await executeTool("reanalyze_activity", { activity_id: id }, { lang: "zh" }),
   );
   assert.equal(backfilled.ok, true);
-  assert.deepEqual(getActivitySummary(RIDE_NAME).pedal_time, {
+  assert.deepEqual(getActivitySummary(id).pedal_time, {
     sample_sec: 60,
     pedaling_sec: 60,
     coasting_sec: 0,
     stationary_sec: 0,
   });
+});
+
+test("set_power_flag / recalibrate_activity_power / get_dossier：标记可逆、系数缩放与撤销、档案可读", async () => {
+  const id = RIDE_ID();
+
+  const flagged = JSON.parse(
+    await executeTool("set_power_flag", { activity_id: id, flagged: true, reason: "测试标记" }, { lang: "zh" }),
+  );
+  assert.equal(flagged.ok, true);
+  assert.equal(flagged.flagged, true);
+  assert.equal(getActivitySummary(id).activity.power_flagged, true);
+
+  const unflag = JSON.parse(
+    await executeTool("set_power_flag", { activity_id: id, flagged: false }, { lang: "zh" }),
+  );
+  assert.equal(unflag.flagged, false);
+  assert.equal(getActivitySummary(id).activity.power_flagged, false);
+
+  const before = getActivitySummary(id);
+  const cal = JSON.parse(
+    await executeTool(
+      "recalibrate_activity_power",
+      { activity_id: id, scale_factor: 1.2 },
+      { lang: "zh" },
+    ),
+  );
+  assert.equal(cal.ok, true);
+  assert.equal(cal.scale_applied, 1.2);
+  assert.equal(cal.changes.calibration_scale.new, 1.2);
+  const scaled = getActivitySummary(id);
+  assert.equal(scaled.power.calibration_scale, 1.2);
+  assert.ok(scaled.power.normalized_power > before.power.normalized_power);
+
+  // 撤销：显式 scale=1 重算回未缩放值并清留痕
+  const undo = JSON.parse(
+    await executeTool(
+      "recalibrate_activity_power",
+      { activity_id: id, scale_factor: 1 },
+      { lang: "zh" },
+    ),
+  );
+  assert.equal(undo.ok, true);
+  assert.equal(undo.changes.calibration_scale.new, null);
+  assert.equal(getActivitySummary(id).power.calibration_scale, undefined);
+  assert.equal(getActivitySummary(id).power.normalized_power, before.power.normalized_power);
+
+  const dossier = JSON.parse(await executeTool("get_dossier", {}, { lang: "zh" }));
+  assert.ok(dossier.cycling);
+  assert.ok(Array.isArray(dossier.peak_power.all_time));
+  assert.ok(dossier.load_shape.weeks.length === 8);
 });

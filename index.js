@@ -16,7 +16,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import FitParser from "fit-file-parser";
 import {
-  upsertActivity,
+  insertActivity,
+  updateActivitySummary,
+  listActivityRideKeys,
+  reattachOrphanRefs,
+  rebuildDossierQuietly,
   computeForm,
   monthlySummary,
   trendMonthly,
@@ -25,13 +29,18 @@ import {
   syncAthleteFromDb,
   getProfile,
   getLang,
+  getDossier,
 } from "./src/db.js";
 import { exportBackup } from "./src/export.js";
+import { newActivityUuid } from "./src/identity.js";
+import { decideImport, hasPositiveDistance, rideFingerprint } from "./src/dedupe.js";
+import { readRecordStart, writeRecordsCsv } from "./src/records.js";
 import {
   buildReviewPrompt,
   buildPlanPrompt,
   buildTaperPrompt,
   buildComparePrompt,
+  buildDossierSection,
   thinToWeekly,
 } from "./src/prompts.js";
 import {
@@ -406,11 +415,11 @@ export function maxField(slice, field) {
 }
 
 /** FTP 自动估算：20 分钟峰功率 × 0.95，并与当前配置对比给出建议 */
-export function estimateFtp(powers) {
+export function estimateFtp(powers, athlete = ATHLETE) {
   const peak20 = peakAvg(powers, 1200);
   if (peak20 == null) return null; // 时长不足 20 分钟
   const estimated = Math.round(peak20 * 0.95);
-  const current = ATHLETE.ftp_watts;
+  const current = athlete.ftp_watts;
   const diff = estimated - current;
   let suggestion = "keep";
   if (diff > 3) suggestion = "consider_update"; // 估算明显高于当前，建议更新 FTP
@@ -429,8 +438,8 @@ export function estimateFtp(powers) {
  * 低于阈值不超过 merge_gap_sec 视为瞬时掉功率（段内合并）；
  * 时长不足 min_duration_sec 的段丢弃。
  */
-export function detectIntervals(records) {
-  const thr = INTERVAL_DETECTION.threshold_pct * ATHLETE.ftp_watts;
+export function detectIntervals(records, athlete = ATHLETE) {
+  const thr = INTERVAL_DETECTION.threshold_pct * athlete.ftp_watts;
   // 1. 原始过阈段 [startIdx, endIdx]
   const rawSegs = [];
   let s = null;
@@ -470,7 +479,7 @@ export function detectIntervals(records) {
       avg_power: avgP,
       max_power: maxField(slice, "power"),
       pct_ftp:
-        avgP != null ? Math.round((avgP / ATHLETE.ftp_watts) * 100) : null,
+        avgP != null ? Math.round((avgP / athlete.ftp_watts) * 100) : null,
       avg_hr: avgField(slice, "heart_rate", 0),
       avg_cadence: avgField(slice, "cadence", 0),
     });
@@ -564,8 +573,8 @@ export function detectClimbs(records) {
  * 踏频-功率联合分析：只统计功率 ≥ power_floor_pct × FTP 的"发力时段"，
  * 判断低踏频高扭矩 vs 高踏频的发力习惯，并给出踏频与功率的相关系数。
  */
-export function cadencePowerAnalysis(records) {
-  const floor = CADENCE_ANALYSIS.power_floor_pct * ATHLETE.ftp_watts;
+export function cadencePowerAnalysis(records, athlete = ATHLETE) {
+  const floor = CADENCE_ANALYSIS.power_floor_pct * athlete.ftp_watts;
   const pts = records.filter(
     (r) => r.power != null && r.power >= floor && r.cadence != null,
   );
@@ -739,26 +748,10 @@ export async function analyzeFile(input, outDir) {
     });
   }
 
-  // ---- 2. 写 CSV ----
+  // ---- 2. records 落盘推迟到入库决策之后（v3 起文件以活动 uuid 命名） ----
+  // 去重要用「首帧起骑时刻」判室内骑行，必须先有完整 records；CSV 文本在内存
+  // 里已齐备，等 decideImport 选出 uuid 后再写 <uuid>.records.csv。
   const base = path.basename(input, path.extname(input));
-  const csvPath = path.join(outDir, `${base}.records.csv`);
-  const header =
-    "timestamp,power,heart_rate,cadence,altitude,speed,distance_m,temperature\n";
-  const lines = records.map((r) =>
-    [
-      r.timestamp,
-      r.power,
-      r.heart_rate,
-      r.cadence,
-      r.altitude,
-      r.speed,
-      r.distance,
-      r.temperature,
-    ]
-      .map((v) => (v == null ? "" : v))
-      .join(","),
-  );
-  fs.writeFileSync(csvPath, header + lines.join("\n"));
 
   // ---- 2.5 暂停识别与缺失统计 ----
   // 码表暂停计时期间不写记录，网格上表现为整段空缺；重新开始计时时骑手通常
@@ -1059,22 +1052,76 @@ export async function analyzeFile(input, outDir) {
   // 全程无功率数据（跑步/游泳常见）：整个 power 段无意义，省略
   if (!hasPower) delete summary.power;
 
-  // ---- 5. 训练库：入库 + 注入当日 CTL/ATL/TSB（失败不中断主流程） ----
+  // ---- 5. records + 训练库：去重决策 → uuid 命名落盘 → 入库 + form 注入 ----
+  // 失败不中断主流程：DB 写失败仍落 records（uuid 孤儿，可人工恢复）与 summary。
+  const fileName = path.basename(input);
+  const candidate = {
+    file_name: fileName,
+    date: summary.activity.date,
+    sport: summary.activity.sport ?? null,
+    duration_sec: summary.activity.duration_sec ?? null,
+    distance_km: summary.activity.distance_km ?? null,
+    start_at: records[0]?.timestamp ?? null,
+    fingerprint: rideFingerprint({
+      date: summary.activity.date,
+      duration_sec: summary.activity.duration_sec,
+      distance_km: summary.activity.distance_km,
+      start_at: records[0]?.timestamp ?? null,
+    }),
+  };
+  let uuid = null;
+  let duplicateOf = null;
+  let csvPath = null;
   try {
-    upsertActivity(path.basename(input), summary);
-    const form = computeForm(summary.activity.date);
-    if (form) {
-      Object.assign(summary.athlete_context, form);
-      upsertActivity(path.basename(input), summary); // 库中同步含 form 的最终版
+    // 室内（无有效距离）判重需要起骑时刻：只对同日期、无有效距离的候选行读首帧
+    const rows = listActivityRideKeys().map((row) =>
+      row.date === candidate.date && !hasPositiveDistance(row.distance_km)
+        ? { ...row, start_at: readRecordStart(row.uuid, { outputDir: outDir }) }
+        : row,
+    );
+    const decision = decideImport(candidate, rows);
+    if (decision.action === "skip") {
+      // 同一趟骑行已存在（异名副本）：不重复入库，按指纹把孤儿报告挂回既有活动
+      uuid = decision.uuid;
+      duplicateOf = { uuid, file_name: decision.file_name };
+      reattachOrphanRefs(candidate.fingerprint, uuid);
+    } else {
+      if (decision.action === "update") {
+        uuid = decision.uuid;
+        updateActivitySummary(uuid, summary, { fingerprint: candidate.fingerprint });
+      } else {
+        uuid = insertActivity({
+          fileName,
+          fingerprint: candidate.fingerprint,
+          source: "import",
+          summary,
+        });
+      }
+      csvPath = writeRecordsCsv(uuid, records, { outputDir: outDir });
+      const form = computeForm(summary.activity.date);
+      if (form) {
+        Object.assign(summary.athlete_context, form);
+        // 库中同步含 form 的最终版
+        updateActivitySummary(uuid, summary, { fingerprint: candidate.fingerprint });
+      }
+      reattachOrphanRefs(candidate.fingerprint, uuid);
+      rebuildDossierQuietly();
     }
+    if (!csvPath) csvPath = path.join(outDir, `${uuid}.records.csv`);
   } catch (e) {
     console.error(`警告: 训练库写入失败（不影响本次输出）: ${e.message}`);
+    uuid = uuid ?? newActivityUuid();
+    try {
+      csvPath = writeRecordsCsv(uuid, records, { outputDir: outDir });
+    } catch (we) {
+      console.error(`警告: records 写入失败: ${we.message}`);
+    }
   }
 
   const jsonPath = path.join(outDir, `${base}.summary.json`);
   fs.writeFileSync(jsonPath, JSON.stringify(summary, null, 2));
 
-  return { csvPath, jsonPath, summary };
+  return { csvPath, jsonPath, summary, uuid, duplicate_of: duplicateOf };
 }
 
 // ---------------- 训练库查询命令 ----------------
@@ -1216,6 +1263,15 @@ function loadSummaryJson(p) {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
+/** CLI 提示词也注入训练档案段（与 server 同源；档案不可用则整段省略） */
+function cliDossierSection(lang) {
+  try {
+    return buildDossierSection(getDossier(), lang);
+  } catch {
+    return null;
+  }
+}
+
 /** 周期规划提示词：月汇总 + 逐周 CTL/ATL/TSB + 近期训练清单 */
 function emitPlanPrompt(weeks, outPath, lang = "zh") {
   const daily = recentFormDaily(weeks * 7);
@@ -1232,6 +1288,8 @@ function emitPlanPrompt(weeks, outPath, lang = "zh") {
     getProfile(),
     undefined,
     lang,
+    new Date(),
+    cliDossierSection(lang),
   );
   emitPrompt(text, outPath);
 }
@@ -1263,6 +1321,8 @@ function emitTaperPrompt(raceDate, outPath, lang = "zh") {
     getProfile(),
     undefined,
     lang,
+    new Date(),
+    cliDossierSection(lang),
   );
   emitPrompt(text, outPath);
 }
@@ -1314,7 +1374,14 @@ async function main() {
   const args = cliArgv();
   if (input === "--review") {
     emitPrompt(
-      buildReviewPrompt(loadSummaryJson(args[3]), getProfile(), undefined, cliLang()),
+      buildReviewPrompt(
+        loadSummaryJson(args[3]),
+        getProfile(),
+        undefined,
+        cliLang(),
+        new Date(),
+        cliDossierSection(cliLang()),
+      ),
       args[4],
     );
     return;
@@ -1330,7 +1397,18 @@ async function main() {
   if (input === "--compare") {
     const a = loadSummaryJson(args[3]);
     const b = loadSummaryJson(args[4]);
-    emitPrompt(buildComparePrompt(a, b, getProfile(), undefined, cliLang()), args[5]);
+    emitPrompt(
+      buildComparePrompt(
+        a,
+        b,
+        getProfile(),
+        undefined,
+        cliLang(),
+        new Date(),
+        cliDossierSection(cliLang()),
+      ),
+      args[5],
+    );
     return;
   }
 

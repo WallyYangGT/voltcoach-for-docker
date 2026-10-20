@@ -16,6 +16,7 @@ ENV NODE_ENV=production \
     FIT_OUTPUT_DIR=/output \
     FIT_DB_PATH=/app/db/fitness.db \
     PORT=3000 \
+    HOST=0.0.0.0 \
     APP_VERSION=${VERSION}
 
 COPY package*.json ./

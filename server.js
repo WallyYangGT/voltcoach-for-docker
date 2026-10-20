@@ -9,18 +9,23 @@
  *       POST /api/athlete               {ftp_watts?, max_hr?, weight_kg?} 更新骑手参数（写训练库并即时生效）
  *       GET  /api/ai-config             当前 AI 服务配置（库值覆盖默认值）
  *       POST /api/ai-config             {api_key?, base_url?, model?, ...} 更新 AI 配置（写训练库并即时生效）
- *       GET  /api/activity?name=x.fit   单次训练完整 summary JSON
- *       POST /api/activity/category     {name, category} 标记训练分类（训练/比赛/恢复/休闲）
- *       POST /api/activity/note         {name, note} 保存训练备注（体感/路况等，AI 复盘纳入考量）
+ *       GET  /api/activity?id=<uuid>    单次训练完整 summary JSON（id 也接受旧文件名；兼容 ?name=）
+ *       POST /api/activity/category     {id, category} 标记训练分类（训练/比赛/恢复/休闲）
+ *       POST /api/activity/note         {id, note} 保存训练备注（体感/路况等，AI 复盘纳入考量）
+ *       POST /api/activity/power-flag   {id, flagged, reason?} 标记/取消「功率不可信」
+ *       DELETE /api/activity?id=<uuid>  删除训练（records 一并删；AI 报告/对话保留）
+ *       GET  /api/dossier               个人训练档案（长期基线）
+ *       GET  /api/duplicates            重复骑行组（同趟骑行多份副本）
+ *       POST /api/activity/merge        {keep, drop} 合并重复骑行（服务端校验同趟）
  *       GET  /api/profile               用户背景与训练目标（identity / goal / configured）
  *       POST /api/profile               {identity?, goal?} 更新用户背景与训练目标（写训练库，AI 报告纳入考量）
- *       GET  /api/records?name=x.fit    逐秒时序（抽稀到 ≤1400 点，供前端画图）
- *       POST /api/upload?filename=x.fit 上传 FIT（原始字节作 body）→ 分析并入库 → 返回 summary
+ *       GET  /api/records?id=<uuid>     逐秒时序（抽稀到 ≤1400 点，供前端画图；id 也接受旧文件名）
+ *       POST /api/upload?filename=x.fit 上传 FIT（原始字节作 body）→ 分析并入库 → 返回 {uuid, summary, duplicate_of}
  *       GET  /api/ftp-estimate          基于最近窗口期骑行（功率峰曲线+心率交叉验证）科学估算 FTP
  *       POST /api/ftp-apply             {ftp_w} 把估算 FTP 写入训练库骑手参数并立即生效
- *       POST /api/ai                    AI 报告：{mode:'review'|'plan'|'taper'|'compare', ...}
+ *       POST /api/ai                    AI 报告：{mode:'review'|'plan'|'taper'|'compare', activity_id?, ...}
  *                                       未配置 AI 密钥时返回提示词供手动复制
- *       POST /api/ai/chat               AI 对话：{chat_id?, mode:'follow_up'|'chat', message, report_id?, file_name?}
+ *       POST /api/ai/chat               AI 对话：{chat_id?, mode:'follow_up'|'chat', message, report_id?, activity_id?}
  *                                       落库 user 消息 + pending 占位 → 202，后台生成回填
  *       GET  /api/ai/chat?id=           对话详情（含消息；有 pending 时返回 202 快照供轮询）
  *       GET  /api/ai/chats?mode=        对话列表（可选 report_id 找回该报告的追问对话）
@@ -46,6 +51,7 @@ import {
   updateAiReport,
   listAiReports,
   getAiReport,
+  getActivityFileName,
   monthlySummary,
   trendMonthly,
   recentFormDaily,
@@ -77,6 +83,12 @@ import {
   deleteMemory,
   getLang,
   setLang,
+  getDossier,
+  deleteActivity,
+  mergeActivityRows,
+  resolveActivityUuid,
+  listActivityRideKeys,
+  rebuildDossierQuietly,
 } from "./src/db.js";
 import {
   buildReviewPrompt,
@@ -86,6 +98,7 @@ import {
   buildAgenticSection,
   buildChatInstruction,
   buildDateSection,
+  buildDossierSection,
   buildMemorySection,
   buildMetricGlossary,
   buildProfileSection,
@@ -97,7 +110,20 @@ import {
 import { callAI, runAgentLoop, isAiConfigured, aiConfigInfo } from "./src/ai.js";
 import { buildSkillsSection } from "./src/skills.js";
 import { toolDefs, executeTool } from "./src/tools.js";
-import { loadRecords, safeName } from "./src/records.js";
+import {
+  copyRecordFile,
+  deleteRecordFile,
+  loadRecords,
+  readRecordStart,
+  safeName,
+} from "./src/records.js";
+import { setPowerFlagAndRefresh } from "./src/power-calib.js";
+import {
+  findDuplicateGroups,
+  hasPositiveDistance,
+  isSameRide,
+} from "./src/dedupe.js";
+import { isActivityUuid } from "./src/identity.js";
 import { AI_CONFIG, ATHLETE, FTP_ESTIMATION, POWER_ZONES, HR_ZONES } from "./src/settings.js";
 import { estimateFtpFromHistory } from "./src/ftp.js";
 import { normalizeLang, t, formatAnomaly } from "./src/i18n.js";
@@ -107,6 +133,8 @@ const WEB_DIR = path.join(ROOT, "web");
 const OUTPUT_DIR = path.resolve(process.env.FIT_OUTPUT_DIR || "output");
 const INPUT_DIR = path.resolve(process.env.FIT_INPUT_DIR || "input");
 const PORT = Number(process.env.PORT) || 3000;
+// 默认只监听本机（纯本地应用）；Docker 通过 HOST=0.0.0.0 显式暴露端口
+const HOST = process.env.HOST || "127.0.0.1";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -213,17 +241,59 @@ function callAiMaybeAgentic(messages, { onChunk, onHeartbeat, source, lang = "zh
   return callAI(messages, { onChunk, onHeartbeat, lang });
 }
 
-/** 组装 AI 提示词（复用 P2 模板，按 lang 双语），返回 { prompt } 或抛出带 message 的错误 */
+/**
+ * 活动身份解析：优先 activity_id（uuid），旧调用方传 file_name 时回退解析。
+ * 非法/不存在返回 null。
+ */
+function activityRefOf(body, idKey, nameKey) {
+  const id = body?.[idKey];
+  if (isActivityUuid(id) && resolveActivityUuid(id)) return id;
+  const name = safeName(body?.[nameKey]);
+  return name ? resolveActivityUuid(name) : null;
+}
+
+/** 写接口的身份解析：id 可为 uuid 或旧文件名；兼容旧 name 字段 */
+function bodyActivityIdentifier(body) {
+  return isActivityUuid(body?.id)
+    ? body.id
+    : safeName(body?.id) || safeName(body?.name);
+}
+
+/** 档案段装配失败只降级（档案可再生，不能阻断报告/对话生成） */
+function safeDossierSection(lang) {
+  try {
+    return buildDossierSection(getDossier(), lang);
+  } catch (e) {
+    console.warn(`训练档案段生成失败（本次省略）: ${e.message}`);
+    return null;
+  }
+}
+
+/** 报告落库上下文（uuid + 指纹由 db 层子查询补齐） */
+function reportContextOf(body) {
+  return {
+    activity_uuid: activityRefOf(body, "activity_id", "file_name"),
+    compare_uuid: activityRefOf(body, "compare_id", "compare_with"),
+    race_date: body?.race_date ?? null,
+  };
+}
+
+/** 组装 AI 提示词（复用 P2 模板，按 lang 双语），返回提示词字符串或抛出带 message 的错误 */
 function buildPromptForMode(body, lang = "zh") {
   const mode = body?.mode;
   const profile = getProfile(); // 用户背景与训练目标，四个场景统一纳入考量
   const skills = buildSkillsSection(lang); // 专业知识库（skills/ 目录，按语言加载），四场景统一注入
+  const dossierSection = safeDossierSection(lang); // 长期基线，四场景统一注入（失败降级）
   if (mode === "review") {
-    const name = safeName(body.file_name);
-    const summary = name && getActivitySummary(name);
+    const id = activityRefOf(body, "activity_id", "file_name");
+    const summary = id && getActivitySummary(id);
     if (!summary)
-      throw new Error(t(lang, "tool.summary_not_found", { name: body.file_name ?? "(未提供)" }));
-    return buildReviewPrompt(summary, profile, skills, lang);
+      throw new Error(
+        t(lang, "tool.summary_not_found", {
+          name: body?.activity_id ?? body?.file_name ?? "(未提供)",
+        }),
+      );
+    return buildReviewPrompt(summary, profile, skills, lang, new Date(), dossierSection);
   }
   if (mode === "plan") {
     const daily = recentFormDaily(56);
@@ -237,6 +307,8 @@ function buildPromptForMode(body, lang = "zh") {
       profile,
       skills,
       lang,
+      new Date(),
+      dossierSection,
     );
   }
   if (mode === "taper") {
@@ -260,15 +332,17 @@ function buildPromptForMode(body, lang = "zh") {
       profile,
       skills,
       lang,
+      new Date(),
+      dossierSection,
     );
   }
   if (mode === "compare") {
-    const a = safeName(body.file_name);
-    const b = safeName(body.compare_with);
+    const a = activityRefOf(body, "activity_id", "file_name");
+    const b = activityRefOf(body, "compare_id", "compare_with");
     const sa = a && getActivitySummary(a);
     const sb = b && getActivitySummary(b);
     if (!sa || !sb) throw new Error(t(lang, "srv.compare_not_found"));
-    return buildComparePrompt(sa, sb, profile, skills, lang);
+    return buildComparePrompt(sa, sb, profile, skills, lang, new Date(), dossierSection);
   }
   throw new Error(t(lang, "srv.unknown_mode", { mode }));
 }
@@ -284,6 +358,7 @@ function buildPromptForMode(body, lang = "zh") {
  */
 function buildChatSystemSection(chat, lang = "zh") {
   const agentic = AI_CONFIG.agentic !== false;
+  const dossierSection = safeDossierSection(lang);
   if (chat.mode === "follow_up") {
     let s = buildChatInstruction("follow_up", lang);
     // 当前时间：追问常涉及「今天感觉如何/接下来怎么练」，先锚定日期基准
@@ -294,14 +369,15 @@ function buildChatSystemSection(chat, lang = "zh") {
       const rep = getAiReport(chat.report_id);
       if (rep?.markdown) s += `\n\n${t(lang, "srv.report_body")}\n${rep.markdown}`;
     }
-    // 追问只带报告会让 AI 无法回答报告未覆盖的细节，按 file_name 附压缩后的训练数据
-    const summary = chat.file_name ? getActivitySummary(chat.file_name) : null;
+    // 追问只带报告会让 AI 无法回答报告未覆盖的细节，按 activity_uuid 附压缩后的训练数据
+    const summary = chat.activity_uuid ? getActivitySummary(chat.activity_uuid) : null;
     if (summary) {
       s +=
         `\n\n${t(lang, "srv.training_data")}\n` + "```json\n" +
         JSON.stringify(compactSummaryForPrompt(summary, lang)) +
         "\n```";
     }
+    if (dossierSection) s += `\n\n${dossierSection}`;
     if (agentic) {
       s += "\n\n" + buildAgenticSection(lang);
       const mem = buildMemorySection(listMemories(), lang);
@@ -316,6 +392,7 @@ function buildChatSystemSection(chat, lang = "zh") {
     buildDateSection(new Date(), lang),
     buildSkillsSection(lang),
     buildProfileSection(getProfile(), lang),
+    dossierSection,
     buildChatInstruction("chat", lang),
   ].filter(Boolean);
   if (agentic) {
@@ -423,13 +500,14 @@ async function handleApi(req, res, url) {
     } catch {
       return sendJson(res, 400, { error: t(lang, "srv.body_json") });
     }
-    const name = safeName(body?.name);
-    if (!name) return sendJson(res, 400, { error: t(lang, "srv.name_invalid") });
+    const identifier = bodyActivityIdentifier(body);
+    if (!identifier)
+      return sendJson(res, 400, { error: t(lang, "srv.activity_id_invalid") });
     if (!isValidCategory(body?.category))
       return sendJson(res, 400, { error: t(lang, "srv.category_invalid") });
     try {
-      setActivityCategory(name, body.category, lang);
-      sendJson(res, 200, { ok: true });
+      const r = setActivityCategory(identifier, body.category, lang);
+      sendJson(res, 200, { ok: true, uuid: r.uuid });
     } catch (e) {
       sendJson(res, 404, { error: e.message });
     }
@@ -444,14 +522,144 @@ async function handleApi(req, res, url) {
     } catch {
       return sendJson(res, 400, { error: t(lang, "srv.body_json") });
     }
-    const name = safeName(body?.name);
-    if (!name) return sendJson(res, 400, { error: t(lang, "srv.name_invalid") });
+    const identifier = bodyActivityIdentifier(body);
+    if (!identifier)
+      return sendJson(res, 400, { error: t(lang, "srv.activity_id_invalid") });
     try {
-      const r = setActivityNote(name, body?.note ?? "", lang);
+      const r = setActivityNote(identifier, body?.note ?? "", lang);
       sendJson(res, 200, r);
     } catch (e) {
       const status = e.message === t(lang, "activity.not_found") ? 404 : 400;
       sendJson(res, status, { error: e.message });
+    }
+    return;
+  }
+
+  // GET /api/dossier  个人训练档案（本地聚合的长期基线）
+  if (req.method === "GET" && url.pathname === "/api/dossier") {
+    sendJson(res, 200, { dossier: getDossier() });
+    return;
+  }
+
+  // GET /api/duplicates  重复骑行组（同趟骑行的多份副本；室内按起骑时刻判）
+  if (req.method === "GET" && url.pathname === "/api/duplicates") {
+    const rows = listActivityRideKeys();
+    const noDistByDate = new Map();
+    for (const r of rows) {
+      if (hasPositiveDistance(r.distance_km)) continue;
+      noDistByDate.set(r.date, (noDistByDate.get(r.date) ?? 0) + 1);
+    }
+    const enriched = rows.map((r) => {
+      if (hasPositiveDistance(r.distance_km)) return r;
+      if ((noDistByDate.get(r.date) ?? 0) < 2) return r;
+      return { ...r, start_at: readRecordStart(r.uuid, { outputDir: OUTPUT_DIR }) };
+    });
+    const groups = findDuplicateGroups(enriched).map((group) =>
+      group.map((r) => ({
+        activity_id: r.uuid,
+        file_name: r.file_name,
+        date: r.date,
+        sport: r.sport,
+        duration_sec: r.duration_sec,
+        distance_km: r.distance_km,
+        category: r.category,
+        note: r.note,
+      })),
+    );
+    sendJson(res, 200, { groups });
+    return;
+  }
+
+  // POST /api/activity/merge {keep, drop}  合并重复骑行（保留最早入库方，一个事务）
+  if (req.method === "POST" && url.pathname === "/api/activity/merge") {
+    let body;
+    try {
+      body = JSON.parse((await readBody(req, 1024 * 1024, lang)).toString("utf8"));
+    } catch {
+      return sendJson(res, 400, { error: t(lang, "srv.body_json") });
+    }
+    let keepId = resolveActivityUuid(body?.keep);
+    let dropId = resolveActivityUuid(body?.drop);
+    if (!keepId || !dropId || keepId === dropId)
+      return sendJson(res, 400, { error: t(lang, "srv.activity_id_invalid") });
+    // 破坏性接口的服务端守卫：两条必须确实是同趟骑行（与重复检查同一判据），
+    // 防止传错参数把无关训练合并/删除。室内行按首帧补起骑时刻后再判。
+    const rows = listActivityRideKeys();
+    const byId = new Map(rows.map((r) => [r.uuid, r]));
+    if (!byId.has(keepId) || !byId.has(dropId))
+      return sendJson(res, 404, { error: t(lang, "srv.activity_not_found") });
+    const enrich = (r) =>
+      hasPositiveDistance(r.distance_km)
+        ? r
+        : { ...r, start_at: readRecordStart(r.uuid, { outputDir: OUTPUT_DIR }) };
+    if (!isSameRide(enrich(byId.get(keepId)), enrich(byId.get(dropId))))
+      return sendJson(res, 400, { error: t(lang, "srv.merge_not_same_ride") });
+    // 「最早入库保留」：前端传反了也按 id 顺序纠正
+    if ((byId.get(keepId)?.id ?? 0) > (byId.get(dropId)?.id ?? 0))
+      [keepId, dropId] = [dropId, keepId];
+    try {
+      const keepName = getActivityFileName(keepId);
+      const dropName = getActivityFileName(dropId);
+      // records 复制在事务前、删除在事务后（副本先保住，再删原件）
+      copyRecordFile(dropId, keepId, { outputDir: OUTPUT_DIR });
+      const result = mergeActivityRows(keepId, dropId);
+      deleteRecordFile(dropId, { outputDir: OUTPUT_DIR });
+      rebuildDossierQuietly();
+      sendJson(res, 200, {
+        ok: true,
+        ...result,
+        keep_file_name: keepName,
+        drop_file_name: dropName,
+      });
+    } catch (e) {
+      sendJson(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  // POST /api/activity/power-flag {id, flagged, reason?}  标记/取消「功率不可信」
+  if (req.method === "POST" && url.pathname === "/api/activity/power-flag") {
+    let body;
+    try {
+      body = JSON.parse((await readBody(req, 1024 * 1024, lang)).toString("utf8"));
+    } catch {
+      return sendJson(res, 400, { error: t(lang, "srv.body_json") });
+    }
+    const identifier = bodyActivityIdentifier(body);
+    if (!identifier)
+      return sendJson(res, 400, { error: t(lang, "srv.activity_id_invalid") });
+    if (typeof body?.flagged !== "boolean")
+      return sendJson(res, 400, { error: t(lang, "tool.flag_invalid") });
+    try {
+      const r = setPowerFlagAndRefresh(
+        resolveActivityUuid(identifier),
+        body.flagged,
+        lang,
+        typeof body?.reason === "string" ? body.reason.slice(0, 200) : null,
+      );
+      sendJson(res, 200, r);
+    } catch (e) {
+      const status = e.message === t(lang, "activity.not_found") ? 404 : 400;
+      sendJson(res, status, { error: e.message });
+    }
+    return;
+  }
+
+  // DELETE /api/activity?id=<uuid>  删除训练（二次确认在前端；报告/对话保留为孤儿）
+  if (req.method === "DELETE" && url.pathname === "/api/activity") {
+    const idParam = url.searchParams.get("id");
+    const identifier = isActivityUuid(idParam)
+      ? idParam
+      : safeName(idParam) || safeName(url.searchParams.get("name"));
+    const uuid = resolveActivityUuid(identifier);
+    if (!uuid) return sendJson(res, 404, { error: t(lang, "srv.activity_not_found") });
+    try {
+      const deleted = deleteActivity(uuid);
+      deleteRecordFile(uuid, { outputDir: OUTPUT_DIR });
+      rebuildDossierQuietly();
+      sendJson(res, 200, { ok: true, ...deleted });
+    } catch (e) {
+      sendJson(res, 400, { error: e.message });
     }
     return;
   }
@@ -478,10 +686,14 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  // GET /api/activity?name=x.fit
+  // GET /api/activity?id=<uuid>（id 也接受旧文件名；兼容 ?name=）
   if (req.method === "GET" && url.pathname === "/api/activity") {
-    const name = safeName(url.searchParams.get("name"));
-    const summary = name && getActivitySummary(name);
+    const idParam = url.searchParams.get("id");
+    const identifier = isActivityUuid(idParam)
+      ? idParam
+      : safeName(idParam) || safeName(url.searchParams.get("name"));
+    const uuid = resolveActivityUuid(identifier);
+    const summary = uuid && getActivitySummary(uuid);
     if (!summary) return sendJson(res, 404, { error: t(lang, "srv.activity_not_found") });
     // 异常标注按请求语言渲染（结构化 anomalies → 文本；旧数据字符串原样透传）
     if (Array.isArray(summary.anomalies)) {
@@ -497,14 +709,24 @@ async function handleApi(req, res, url) {
       power: zoneRanges(POWER_ZONES, ac.ftp_watts ?? ATHLETE.ftp_watts),
       hr: zoneRanges(HR_ZONES, ac.max_hr ?? ATHLETE.max_hr),
     };
-    sendJson(res, 200, { file_name: name, summary, zone_ranges });
+    sendJson(res, 200, {
+      uuid,
+      activity_id: uuid,
+      file_name: getActivityFileName(uuid),
+      summary,
+      zone_ranges,
+    });
     return;
   }
 
-  // GET /api/records?name=x.fit
+  // GET /api/records?id=<uuid>（id 也接受旧文件名；兼容 ?name=）
   if (req.method === "GET" && url.pathname === "/api/records") {
-    const name = safeName(url.searchParams.get("name"));
-    const data = name && loadRecords(name, { outputDir: OUTPUT_DIR });
+    const idParam = url.searchParams.get("id");
+    const identifier = isActivityUuid(idParam)
+      ? idParam
+      : safeName(idParam) || safeName(url.searchParams.get("name"));
+    const uuid = resolveActivityUuid(identifier);
+    const data = uuid && loadRecords(uuid, { outputDir: OUTPUT_DIR });
     if (!data)
       return sendJson(res, 404, { error: t(lang, "srv.records_not_found") });
     sendJson(res, 200, data);
@@ -523,8 +745,14 @@ async function handleApi(req, res, url) {
     const fitPath = path.join(INPUT_DIR, name);
     fs.writeFileSync(fitPath, buf);
     try {
-      const { summary } = await analyzeFile(fitPath, OUTPUT_DIR);
-      sendJson(res, 200, { file_name: name, summary });
+      const { summary, uuid, duplicate_of } = await analyzeFile(fitPath, OUTPUT_DIR);
+      sendJson(res, 200, {
+        uuid,
+        activity_id: uuid,
+        file_name: name,
+        duplicate_of: duplicate_of ?? null,
+        summary,
+      });
     } catch (e) {
       fs.rmSync(fitPath, { force: true }); // 分析失败的文件不留档
       sendJson(res, 422, { error: t(lang, "srv.parse_failed", { msg: e.message }) });
@@ -556,7 +784,7 @@ async function handleApi(req, res, url) {
     // 后台完成 AI 调用后更新为 completed，失败则更新为 failed 并记录原因。
     let reportId;
     try {
-      reportId = createPendingAiReport(body.mode, body, prompt);
+      reportId = createPendingAiReport(body.mode, reportContextOf(body), prompt);
     } catch (e) {
       return sendJson(res, 500, { error: t(aiLang, "srv.report_create_failed", { msg: e.message }) });
     }
@@ -636,11 +864,11 @@ async function handleApi(req, res, url) {
       if (!getAiChat(chatId)) return sendJson(res, 404, { error: t(chatLang, "srv.chat_not_found") });
     } else {
       // 新建对话：title 取首条消息前 50 字
-      const fileName = body?.file_name ? safeName(body.file_name) : null;
+      const activityId = activityRefOf(body, "activity_id", "file_name");
       const reportId = Number(body?.report_id);
       chatId = createAiChat(mode, {
         report_id: Number.isInteger(reportId) && reportId > 0 ? reportId : null,
-        file_name: fileName,
+        activity_uuid: activityId,
         title: message.slice(0, 50),
       });
     }
@@ -869,8 +1097,10 @@ if (isMain) {
   // （之后 /api/athlete、/api/ftp-apply、/api/ai-config 原地更新）
   syncAthleteFromDb();
   syncAiConfigFromDb();
-  createServer().listen(PORT, () => {
-    console.log(`VoltCoach Web 界面: http://localhost:${PORT}`);
+  createServer().listen(PORT, HOST, () => {
+    console.log(
+      `VoltCoach Web 界面: http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`,
+    );
     if (!isAiConfigured())
       console.log("提示: 未配置 AI 密钥（设置页可配），AI 报告将退化为复制提示词模式");
     logTimezoneHint();

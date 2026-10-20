@@ -7,7 +7,7 @@
 
 import {
   $, app, esc, api, num, fmtDur, state, loadOverview,
-  sportBadge, ZONE_COLORS, actRowHtml,
+  sportBadge, ZONE_COLORS, actRowHtml, confirmModal,
 } from "../common.js";
 import { t, CATEGORY_OPTIONS, formNote, cadenceStyleHint } from "../i18n.js";
 import { drawLineChart, zoneBarsHtml, peakCurveHtml } from "../charts.js";
@@ -17,10 +17,57 @@ import { runAi, attachFollowUp } from "../ai.js";
 
 export async function renderActivities() {
   app.innerHTML = `<div class="empty loading">${esc(t("common.loading"))}</div>`;
-  const ov = await loadOverview();
+  const [ov, dup] = await Promise.all([
+    loadOverview(),
+    api("/api/duplicates").catch(() => ({ groups: [] })),
+  ]);
+  const groups = dup.groups || [];
+  const dupHtml = groups.length
+    ? `<div class="panel">
+        <div class="panel-title">${esc(t("dup.title", { n: groups.length }))}</div>
+        <p class="muted" style="font-size:12px">${esc(t("dup.hint"))}</p>
+        ${groups
+          .map(
+            (g, i) => `<div class="dup-group">
+              <div>${g
+                .map(
+                  (r) =>
+                    `${esc(r.date)} · ${esc(r.file_name)} · ${fmtDur(r.duration_sec)}`,
+                )
+                .join("<br>")}</div>
+              <button class="btn sm ghost" data-dup="${i}"><span>${esc(t("dup.merge"))}</span></button>
+            </div>`,
+          )
+          .join("")}
+      </div>`
+    : "";
   app.innerHTML = `
     <div class="view-title"><h1>${esc(t("acts.title"))}</h1><span class="sub">${esc(t("acts.count", { n: (ov.activities || []).length }))}</span></div>
+    ${dupHtml}
     <div class="act-list">${(ov.activities || []).map(actRowHtml).join("") || `<div class="empty">${esc(t("acts.empty"))}</div>`}</div>`;
+
+  app.querySelectorAll("button[data-dup]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const group = groups[Number(btn.dataset.dup)];
+      if (!group || group.length < 2) return;
+      confirmModal(t("dup.confirm_title"), t("dup.confirm_text"), async () => {
+        try {
+          const keep = group[0].activity_id;
+          for (const r of group.slice(1)) {
+            await api("/api/activity/merge", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ keep, drop: r.activity_id }),
+            });
+          }
+          state.overview = null;
+          await renderActivities();
+        } catch (e) {
+          alert(t("dup.failed", { msg: e.message }));
+        }
+      });
+    }),
+  );
 }
 
 // ---------------- 训练详情 ----------------
@@ -33,11 +80,11 @@ function metricHtml(label, value, unit, sub) {
   </div>`;
 }
 
-export async function renderActivityDetail(name) {
+export async function renderActivityDetail(id) {
   app.innerHTML = `<div class="empty loading">${esc(t("common.loading"))}</div>`;
-  const [{ summary, zone_ranges }, records] = await Promise.all([
-    api(`/api/activity?name=${encodeURIComponent(name)}`),
-    api(`/api/records?name=${encodeURIComponent(name)}`).catch(() => null),
+  const [{ summary, zone_ranges, file_name: fileName }, records] = await Promise.all([
+    api(`/api/activity?id=${encodeURIComponent(id)}`),
+    api(`/api/records?id=${encodeURIComponent(id)}`).catch(() => null),
   ]);
   const a = summary.activity || {};
   const p = summary.power || {};
@@ -87,6 +134,9 @@ export async function renderActivityDetail(name) {
     ftpCallout = `<div class="callout">${esc(t("ftp.callout_hi", { est: est.estimated_ftp_w, cur: est.current_ftp_w }))}</div>`;
   else if (est && est.suggestion === "consider_recheck")
     ftpCallout = `<div class="callout info">${esc(t("ftp.callout_lo", { est: est.estimated_ftp_w, cur: est.current_ftp_w }))}</div>`;
+  const flaggedCallout = a.power_flagged
+    ? `<div class="callout">${esc(t("power.excluded"))}</div>`
+    : "";
 
   // ---- 时序图 ----
   const seriesDefs = [
@@ -102,7 +152,7 @@ export async function renderActivityDetail(name) {
     <div class="detail-head">
       <a class="back-link" href="#/activities">${esc(t("detail.back"))}</a>
       <h1>${sportBadge(a.sport)}${esc(a.date)}</h1>
-      <span class="muted mono" style="font-size:12px">${esc(name)}</span>
+      <span class="muted mono" style="font-size:12px">${esc(fileName ?? id)}</span>
       <div class="category-bar">
         <label for="actCategory">${esc(t("cat.label"))}</label>
         <select id="actCategory">
@@ -111,11 +161,17 @@ export async function renderActivityDetail(name) {
             .join("")}
         </select>
         <span id="catSaved" class="muted" style="display:none">${esc(t("cat.saved"))}</span>
+        <label class="power-flag" title="${esc(t("power.flag_title"))}">
+          <input type="checkbox" id="actPowerFlag" ${a.power_flagged ? "checked" : ""}>
+          ${esc(t("power.flag_label"))}
+        </label>
       </div>
       <span class="spacer"></span>
       <button class="btn" id="btnAiReview"><span>${esc(t("btn.ai_review"))}</span></button>
+      <button class="btn ghost" id="btnDeleteActivity"><span>${esc(t("detail.delete"))}</span></button>
     </div>
     ${ftpCallout}
+    ${flaggedCallout}
     <div class="metric-grid">${metrics.join("")}</div>
     <div class="panel">
       <div class="panel-title">${esc(t("note.title"))}</div>
@@ -192,7 +248,7 @@ export async function renderActivityDetail(name) {
       await api("/api/activity/note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, note: noteInput.value }),
+        body: JSON.stringify({ id, note: noteInput.value }),
       });
       noteSaved.style.display = "";
     } catch (e) {
@@ -210,7 +266,7 @@ export async function renderActivityDetail(name) {
         await api("/api/activity/category", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, category: catSel.value }),
+          body: JSON.stringify({ id, category: catSel.value }),
         });
         catSaved.style.display = "";
         state.overview = null; // 列表页分类缓存失效
@@ -220,12 +276,47 @@ export async function renderActivityDetail(name) {
     });
   }
 
+  // 功率可信度：标记/取消「功率不可信」（可逆；档案功率基线随之重建）
+  const flagBox = $("#actPowerFlag");
+  if (flagBox) {
+    flagBox.addEventListener("change", async () => {
+      flagBox.disabled = true;
+      try {
+        await api("/api/activity/power-flag", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, flagged: flagBox.checked }),
+        });
+        state.overview = null;
+        await renderActivityDetail(id); // 重拉详情，显示/隐藏排除披露
+      } catch (e) {
+        flagBox.checked = !flagBox.checked;
+        alert(t("power.failed", { msg: e.message }));
+      } finally {
+        flagBox.disabled = false;
+      }
+    });
+  }
+
+  // 删除训练：二次确认；AI 报告/对话保留（孤儿引用按指纹可重挂）
+  $("#btnDeleteActivity")?.addEventListener("click", () => {
+    confirmModal(t("detail.delete_title"), t("detail.delete_text"), async () => {
+      try {
+        await api(`/api/activity?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+        state.overview = null;
+        location.hash = "#/activities";
+      } catch (e) {
+        alert(t("detail.delete_failed", { msg: e.message }));
+      }
+    });
+  });
+
   // AI 复盘：自动加载本训练缓存的最新 review 报告；没有则显示按钮，点击生成
   const panel = $("#aiPanel"), body = $("#aiBody");
   if (panel && body) {
     try {
       const reports = (await api(`/api/ai/reports?mode=review`)).reports
-        .filter((r) => r.file_name === name);
+        .filter((r) => r.activity_uuid === id);
       if (reports.length) {
         const rep = reports[0];
         panel.style.display = "";
@@ -242,13 +333,13 @@ export async function renderActivityDetail(name) {
             `<button class="btn ghost" id="btnRegenReview" style="margin-left:auto"><span>${esc(t("ai.regen"))}</span></button>`;
           body.innerHTML = `<div class="ai-result">${cached.html}</div>`;
           state.aiThread = {
-            file_name: name,
+            activity_id: id,
             report_id: cached.id,
             chat_id: null,
           };
           attachFollowUp(panel, body);
           $("#btnRegenReview").addEventListener("click", () =>
-            runAi({ mode: "review", file_name: name }, panel, body),
+            runAi({ mode: "review", activity_id: id }, panel, body),
           );
         }
       }
@@ -257,13 +348,13 @@ export async function renderActivityDetail(name) {
         if (panel.style.display !== "none") {
           panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
         } else {
-          runAi({ mode: "review", file_name: name }, panel, body);
+          runAi({ mode: "review", activity_id: id }, panel, body);
         }
       });
     } catch (e) {
       // 即使历史报告接口出错，也不影响训练详情主内容
       $("#btnAiReview").addEventListener("click", () =>
-        runAi({ mode: "review", file_name: name }, panel, body),
+        runAi({ mode: "review", activity_id: id }, panel, body),
       );
     }
   }

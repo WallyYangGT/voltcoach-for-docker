@@ -21,6 +21,7 @@ import { renderAI } from "./js/views/ai.js";
 import { renderChat } from "./js/views/chat.js";
 import { renderSettings } from "./js/views/settings.js";
 import { renderMemory } from "./js/views/memory.js";
+import { renderDossier } from "./js/views/dossier.js";
 import { renderAbout } from "./js/views/about.js";
 
 // ---------------- 语言初始化（首次启动检测 → localStorage → 训练库同步） ----------------
@@ -61,7 +62,7 @@ function setActiveTab(view) {
   // 记忆/设置/关于都属于三点菜单，保持菜单按钮高亮
   document.querySelector(".tab.menu-trigger")?.classList.toggle(
     "active",
-    view === "memory" || view === "settings" || view === "about",
+    view === "memory" || view === "dossier" || view === "settings" || view === "about",
   );
 }
 
@@ -96,6 +97,7 @@ async function route() {
     else if (view === "ai") { setActiveTab("ai"); await renderAI(); }
     else if (view === "chat") { setActiveTab("chat"); await renderChat(arg ? Number(arg) : null); }
     else if (view === "memory") { setActiveTab("memory"); await renderMemory(); }
+    else if (view === "dossier") { setActiveTab("dossier"); await renderDossier(); }
     else if (view === "settings") { setActiveTab("settings"); await renderSettings(); }
     else if (view === "about") { setActiveTab("about"); renderAbout(); }
     else { setActiveTab("dashboard"); await renderDashboard(); }

@@ -45,8 +45,12 @@ export function estimateFtpFromHistory(
   const notes = [];
   const warnings = []; // 影响置信度的内部标记
 
-  // ---- 1. 样本筛选：仅采信功率覆盖率达标且有 power 段的骑行 ----
-  const withPower = activities.filter((a) => a.summary?.power);
+  // ---- 1. 样本筛选：排除「功率不可信」标记，仅采信覆盖率达标且有 power 段的骑行 ----
+  // 标记语义是功率失真（心率/时长仍可信），FTP 峰值法只依赖功率，故整趟剔除并在
+  // data_needs 披露剔除数——模型不得手工折价估算（技能 06 口径）。
+  const flagged = activities.filter((a) => a.power_flagged);
+  const unflagged = activities.filter((a) => !a.power_flagged);
+  const withPower = unflagged.filter((a) => a.summary?.power);
   const usable = withPower.filter(
     (a) =>
       (a.summary.data_quality?.power_coverage_pct ?? 100) >=
@@ -59,11 +63,15 @@ export function estimateFtpFromHistory(
   );
   const sample = {
     cycling_rides: activities.length,
+    flagged_excluded: flagged.length,
     rides_with_power: withPower.length,
     usable_power_rides: usable.length,
     rides_with_hr: withHr.length,
   };
 
+  if (flagged.length) {
+    dataNeeds.push(t(lang, "ftp.flagged_excluded", { n: flagged.length }));
+  }
   if (usable.length < cfg.min_rides) {
     dataNeeds.push(t(lang, "ftp.few_rides", { n: usable.length, min: cfg.min_rides }));
     warnings.push("few_rides");
@@ -82,7 +90,7 @@ export function estimateFtpFromHistory(
       const w = a.summary.power.peak_curve?.[key];
       if (w == null) continue;
       if (!best || w > best.watts)
-        best = { watts: w, date: a.date, file_name: a.file_name };
+        best = { watts: w, date: a.date, uuid: a.uuid, file_name: a.file_name };
     }
     return best;
   };
@@ -130,6 +138,7 @@ export function estimateFtpFromHistory(
     ftp_w: Math.round(p20.watts * cfg.coggan_factor),
     peak_20min_w: p20.watts,
     date: p20.date,
+    uuid: p20.uuid,
     file_name: p20.file_name,
   };
 
@@ -143,7 +152,9 @@ export function estimateFtpFromHistory(
   };
 
   // 5a. 全力判定：20min 峰功率所在骑行的心率峰值是否达到全力阈值
-  const anchor = usable.find((a) => a.file_name === p20.file_name);
+  const anchor = usable.find((a) =>
+    p20.uuid ? a.uuid === p20.uuid : a.file_name === p20.file_name,
+  );
   const thresholdHr = Math.round(athlete.max_hr * cfg.max_effort_hr_pct);
   hrCheck.threshold_hr = thresholdHr;
   const anchorHr = anchor?.summary.heart_rate;
@@ -275,6 +286,44 @@ function methodReferences(lang) {
 // ---------------- AI 自动采纳门槛（evaluateFtpApply，自 VoltCoach core/ftp.ts 回同步） ----------------
 
 /**
+ * 从估算结果选定写入值（AI 教练在估算区间内自选 FTP，2026-10-20 §35）：
+ * 缺省（requested 省略/非有限数）取估算器输出（两法均值）；给了 requested 时
+ * **夹逼到本次估算区间 [range_low, range_high]**——模型只能在科学估算的区间内
+ * 表达保守/激进的取舍，永远写不出区间外的值。写入前的 50–500W 采纳范围闸仍由
+ * evaluateFtpApply 在最终值上执行。
+ * @returns {{ftp_w:number, requested_w:number|null, clamped:boolean}|null}
+ */
+export function selectFtpFromEstimate(result, requested) {
+  const e = result?.estimate;
+  if (result?.status !== "ok" || !e) return null;
+  if (requested == null || !Number.isFinite(requested)) {
+    return { ftp_w: e.ftp_w, requested_w: null, clamped: false };
+  }
+  const want = Math.round(requested);
+  const ftp_w = Math.min(Math.max(want, e.range_low), e.range_high);
+  return { ftp_w, requested_w: want, clamped: ftp_w !== want };
+}
+
+/**
+ * FTP 是否已校准（2026-10 §35 收紧）：有溯源戳（曾发生实际值变更）或当前值
+ * ≠ 出厂默认值。旧版撤销的假戳（值=默认 + manual 戳 + 无待处理 AI 快照）
+ * 在读取时归一化为未校准，不改写存量数据。
+ */
+export function isFtpCalibratedFrom(
+  ftpWatts,
+  ftpUpdatedAt,
+  defaultFtpWatts,
+  opts = {},
+) {
+  const stamped = typeof ftpUpdatedAt === "string" && ftpUpdatedAt.trim().length > 0;
+  const valueCalibrated = Number(ftpWatts) !== Number(defaultFtpWatts);
+  if (!valueCalibrated && stamped && opts?.source === "manual" && !opts?.hasAiUpdate) {
+    return false;
+  }
+  return stamped || valueCalibrated;
+}
+
+/**
  * 「AI 教练自动更新 FTP」的采纳门槛（纯函数，从估算结果的结构化字段重新推导）。
  *
  * 与 Web 设置页的 UI 门控（仅 confidence === 'high'）刻意不同：置信度口径
@@ -288,9 +337,16 @@ function methodReferences(lang) {
  * @param {string|null} latestRideDate 窗口内最近一次骑行日期（YYYY-MM-DD；无骑行为 null）
  * @param {string} today 今日日期（YYYY-MM-DD，调用方注入以便测试）
  * @param {object} cfg 阈值配置（freshness_days 为 AI 采纳专属门槛）
+ * @param {number|null} [chosenW] 自选后的最终写入值（缺省取 e.ftp_w，即两法均值）
  * @returns {{ok: boolean, reason_key: string|null, reason_vars?: object}}
  */
-export function evaluateFtpApply(result, latestRideDate, today, cfg = FTP_ESTIMATION) {
+export function evaluateFtpApply(
+  result,
+  latestRideDate,
+  today,
+  cfg = FTP_ESTIMATION,
+  chosenW = null,
+) {
   const applyReject = (key, vars) => ({ ok: false, reason_key: key, ...(vars ? { reason_vars: vars } : {}) });
   const e = result.estimate;
   if (result.status !== "ok" || !e) return applyReject("ftp.apply.no_data");
@@ -314,8 +370,10 @@ export function evaluateFtpApply(result, latestRideDate, today, cfg = FTP_ESTIMA
     (Date.parse(today + "T00:00:00Z") - Date.parse(latestRideDate + "T00:00:00Z")) / 86400000,
   );
   if (days > cfg.freshness_days) return applyReject("ftp.apply.stale", { n: cfg.freshness_days });
-  if (e.diff_w === 0) return applyReject("ftp.apply.no_change");
-  if (e.ftp_w < cfg.apply_min_w || e.ftp_w > cfg.apply_max_w)
-    return applyReject("ftp.apply.range", { w: e.ftp_w, lo: cfg.apply_min_w, hi: cfg.apply_max_w });
+  // no_change 与 50–500W 范围闸按最终写入值判定（自选值可能不同于两法均值）
+  const target = chosenW != null && Number.isFinite(chosenW) ? chosenW : e.ftp_w;
+  if (target === e.current_ftp_w) return applyReject("ftp.apply.no_change");
+  if (target < cfg.apply_min_w || target > cfg.apply_max_w)
+    return applyReject("ftp.apply.range", { w: target, lo: cfg.apply_min_w, hi: cfg.apply_max_w });
   return { ok: true, reason_key: null };
 }

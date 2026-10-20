@@ -23,11 +23,15 @@ process.env.FIT_INPUT_DIR = path.join(tmp, "input");
 
 const { buildRideFit } = await import("./make_test_fit.mjs");
 const { createServer } = await import("../server.js");
-const { closeDb, saveAiReport, createPendingAiReport, updateAiReport, listAiReports, getAiReport, upsertActivity, getAthleteState, setActivityCategory, getActivitySummary, getAiConfig, migrateAiEnvToDb, createAiChat, addAiChatMessage, updateAiChatMessage, touchAiChat, listAiChats, getAiChat, findFollowUpChat, deleteAiChat, saveMemory, listMemories, listAllMemories, deleteMemory } = await import("../src/db.js");
+const { closeDb, saveAiReport, createPendingAiReport, updateAiReport, listAiReports, getAiReport, insertActivity, resolveActivityUuid, listActivityRideKeys, getAthleteState, setActivityCategory, getActivitySummary, getAiConfig, migrateAiEnvToDb, createAiChat, addAiChatMessage, updateAiChatMessage, touchAiChat, listAiChats, getAiChat, findFollowUpChat, deleteAiChat, saveMemory, listMemories, listAllMemories, deleteMemory } = await import("../src/db.js");
+const { rideFingerprint } = await import("../src/dedupe.js");
 const { buildMemorySection, buildAgenticSection } = await import("../src/prompts.js");
 const { AI_CONFIG } = await import("../src/settings.js");
 
 let server, base;
+
+const RIDE_NAME = "web_test_ride.fit";
+const RIDE_ID = () => resolveActivityUuid(RIDE_NAME);
 
 before(async () => {
   server = createServer();
@@ -62,12 +66,15 @@ test("上传合成 FIT → 分析入库并返回 summary", async () => {
     body: fit,
   });
   assert.equal(resp.status, 200);
-  const { file_name, summary } = await resp.json();
+  const { uuid, activity_id, file_name, duplicate_of, summary } = await resp.json();
   assert.equal(file_name, "web_test_ride.fit");
+  assert.match(uuid, /^[0-9a-f]{32}$/);
+  assert.equal(activity_id, uuid);
+  assert.equal(duplicate_of, null);
   assert.equal(summary.activity.sport, "cycling");
   assert.ok(summary.power.normalized_power > 150);
-  // CSV 与 summary 落盘到隔离输出目录
-  assert.ok(fs.existsSync(path.join(tmp, "output", "web_test_ride.records.csv")));
+  // records 以 uuid 命名；summary JSON 仍按输入文件基名输出（CLI 产物契约）
+  assert.ok(fs.existsSync(path.join(tmp, "output", `${uuid}.records.csv`)));
   assert.ok(fs.existsSync(path.join(tmp, "output", "web_test_ride.summary.json")));
 });
 
@@ -92,6 +99,15 @@ test("详情接口返回完整 summary", async () => {
   assert.equal(data.zone_ranges.power.Z7, `${Math.round(1.5 * ftp)}+`);
   assert.equal(data.zone_ranges.hr.Z2, `${Math.round(0.68 * maxHr)}-${Math.round(0.75 * maxHr)}`);
   assert.equal(data.zone_ranges.hr.Z5, `${Math.round(0.92 * maxHr)}+`);
+});
+
+test("旧 #/activity/<file_name> 深链：id 传旧文件名也能解析", async () => {
+  const legacy = await getJson(`/api/activity?id=${encodeURIComponent("web_test_ride.fit")}`);
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.data.uuid, RIDE_ID());
+  const rec = await getJson(`/api/records?id=${encodeURIComponent("web_test_ride.fit")}`);
+  assert.equal(rec.status, 200);
+  assert.ok(rec.data.points.length > 0);
 });
 
 test("训练分类可标记并在 summary 中合并", async () => {
@@ -326,11 +342,12 @@ test("上传非 .fit 文件名被拒绝", async () => {
 
 test("AI 报告缓存：每个 mode 仅保留最近 30 条", () => {
   for (let i = 1; i <= 35; i++) {
-    saveAiReport("review", { file_name: `ride_${i}.fit` }, "prompt", `report ${i}`);
+    saveAiReport("review", { activity_uuid: RIDE_ID() }, "prompt", `report ${i}`);
   }
   const rows = listAiReports("review");
   assert.equal(rows.length, 30);
-  assert.equal(rows[0].file_name, "ride_35.fit"); // 最新的在前
+  assert.equal(rows[0].file_name, RIDE_NAME); // JOIN 活动后的展示名；最新的在前
+  assert.equal(rows[0].activity_uuid, RIDE_ID());
   const latest = getAiReport(rows[0].id);
   assert.equal(latest.status, "completed");
   assert.equal(latest.markdown, "report 35");
@@ -376,18 +393,23 @@ test("AI 报告状态：pending 创建、update 回填、接口按状态返回",
 test("FTP 估算接口：基于训练库骑行返回双方法估值", async () => {
   // 插入 3 次合成骑行（日期远离其他测试数据，独占估算窗口）
   const mk = (name, date) =>
-    upsertActivity(name, {
-      activity: { date, sport: "cycling", duration_sec: 3600, distance_km: 30 },
-      power: {
-        avg: 130,
-        normalized_power: 130,
-        intensity_factor: 1.0,
-        tss: 100,
-        peak_curve: { "5min": 150, "20min": 130 },
-        zone_distribution_pct: { Z5: 5 },
+    insertActivity({
+      fileName: name,
+      source: "test",
+      fingerprint: rideFingerprint({ date, duration_sec: 3600, distance_km: 30 }),
+      summary: {
+        activity: { date, sport: "cycling", duration_sec: 3600, distance_km: 30 },
+        power: {
+          avg: 130,
+          normalized_power: 130,
+          intensity_factor: 1.0,
+          tss: 100,
+          peak_curve: { "5min": 150, "20min": 130 },
+          zone_distribution_pct: { Z5: 5 },
+        },
+        heart_rate: { avg: 150, max: 180, zone_distribution_pct: { Z4: 5 }, hr_drift_pct: 2 },
+        data_quality: { power_coverage_pct: 100, hr_coverage_pct: 100 },
       },
-      heart_rate: { avg: 150, max: 180, zone_distribution_pct: { Z4: 5 }, hr_drift_pct: 2 },
-      data_quality: { power_coverage_pct: 100, hr_coverage_pct: 100 },
     });
   mk("ftp_a.fit", "2099-01-01");
   mk("ftp_b.fit", "2099-01-02");
@@ -671,9 +693,14 @@ test("AI 对话 db CRUD：状态机 / 列表聚合 / findFollowUpChat / 级联�
   assert.equal(chat.messages[2].status, "failed");
   assert.equal(chat.messages[2].error, "AI 请求超时");
 
-  // findFollowUpChat：取该报告最新的 follow_up 对话
-  const fid = createAiChat("follow_up", { report_id: 424242, file_name: "a.fit", title: "追问" });
-  assert.equal(findFollowUpChat(424242), fid);
+  // findFollowUpChat：取该报告最新的 follow_up 对话（v3：report_id 外键需真实存在）
+  const repId = createPendingAiReport("review", { activity_uuid: RIDE_ID() }, "p");
+  const fid = createAiChat("follow_up", {
+    report_id: repId,
+    activity_uuid: RIDE_ID(),
+    title: "追问",
+  });
+  assert.equal(findFollowUpChat(repId), fid);
   assert.equal(findFollowUpChat(313131), null);
 
   // 级联删除：对话与消息一起消失；不存在返回 0 / null
@@ -923,7 +950,7 @@ test("AI 记忆 db CRUD：校验 / 非法 category 归 general / 取代链 / 删
   deleteMemory(id1); // 清理残留，避免影响后续滚动清理测试
 });
 
-test("AI 记忆滚动清理：超过 100 条先删最旧已取代，不足再删最旧有效；注入限 30 条", () => {
+test("AI 记忆滚动清理：超过 100 条先删最旧已取代，不足再删最旧有效；注入上限 100 条", () => {
   // 先清掉可能残留的已取代记忆，保证计数可控
   for (const m of listAllMemories().filter((m) => !m.active)) deleteMemory(m.id);
 
@@ -952,8 +979,8 @@ test("AI 记忆滚动清理：超过 100 条先删最旧已取代，不足再删
   for (const id of oldestValid)
     assert.ok(!all.some((m) => m.id === id), "已取代不足时应删最旧有效记忆");
 
-  // 注入上限：100 条有效记忆只取最近 30 条
-  assert.equal(listMemories().length, 30);
+  // 注入上限：v2 起注入全部有效记忆（≤100，短期过期的已在 db 层过滤）
+  assert.equal(listMemories().length, 100);
   assert.equal(listMemories(5).length, 5);
 });
 
@@ -1197,4 +1224,175 @@ test("AI 报告生成：提示词注入用户记忆段（mock 侧断言请求体
     Object.assign(AI_CONFIG, saved);
     mockAi.close();
   }
+});
+
+// ---------------- v2/v3 新接口（档案 / 功率标记 / 重复合并 / 删除重挂） ----------------
+
+test("功率标记接口：标记后详情披露且档案可见，取消后恢复", async () => {
+  const id = RIDE_ID();
+  const post = (flagged) =>
+    fetch(`${base}/api/activity/power-flag`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, flagged, reason: "e2e" }),
+    });
+  const on = await post(true);
+  assert.equal(on.status, 200);
+  assert.equal((await on.json()).flagged, true);
+  const det = await getJson(`/api/activity?id=${id}`);
+  assert.equal(det.status, 200);
+  assert.equal(det.data.summary.activity.power_flagged, true);
+
+  const dossier = await getJson("/api/dossier");
+  assert.equal(dossier.status, 200);
+  assert.ok(dossier.data.dossier);
+  assert.ok(dossier.data.dossier.cycling.total_flagged >= 1);
+
+  const off = await post(false);
+  assert.equal(off.status, 200);
+  assert.equal((await off.json()).flagged, false);
+  const det2 = await getJson(`/api/activity?id=${id}`);
+  assert.equal(det2.data.summary.activity.power_flagged, false);
+});
+
+test("删除训练 → 重导入同一趟骑行：报告保留并按指纹自动重挂", async () => {
+  const fileName = "reattach_case.fit";
+  const fit = buildRideFit({ durationSec: 420, power: 175 });
+  const upload = async () => {
+    const resp = await fetch(`${base}/api/upload?filename=${encodeURIComponent(fileName)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: fit,
+    });
+    assert.equal(resp.status, 200);
+    return resp.json();
+  };
+  const first = await upload();
+  assert.match(first.uuid, /^[0-9a-f]{32}$/);
+  const reportId = saveAiReport("review", { activity_uuid: first.uuid }, "p", "# 报告");
+  const before = getAiReport(reportId);
+  assert.equal(before.activity_uuid, first.uuid);
+  const fingerprint = before.activity_fingerprint;
+  assert.ok(fingerprint);
+
+  const del = await fetch(`${base}/api/activity?id=${first.uuid}`, { method: "DELETE" });
+  assert.equal(del.status, 200);
+  const orphan = getAiReport(reportId);
+  assert.equal(orphan.activity_uuid, null);
+  assert.equal(orphan.activity_fingerprint, fingerprint);
+  assert.equal(orphan.activity_deleted, true);
+
+  const second = await upload();
+  assert.match(second.uuid, /^[0-9a-f]{32}$/);
+  assert.notEqual(second.uuid, first.uuid);
+  const reattached = getAiReport(reportId);
+  assert.equal(reattached.activity_uuid, second.uuid);
+  assert.equal(reattached.activity_fingerprint, fingerprint);
+});
+
+test("导入决策 e2e：同名不同趟 → 插入新行（不静默覆盖）", async () => {
+  const fileName = "same_name_case.fit";
+  const start = Date.UTC(2025, 0, 1, 10, 0, 0);
+  const upload = async (durationSec) => {
+    const resp = await fetch(`${base}/api/upload?filename=${encodeURIComponent(fileName)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: buildRideFit({ startMs: start, durationSec, power: 180, speedMS: 8 }),
+    });
+    assert.equal(resp.status, 200);
+    return resp.json();
+  };
+  const first = await upload(240);
+  const second = await upload(300);
+  assert.notEqual(second.uuid, first.uuid);
+  const rows = listActivityRideKeys().filter((r) => r.file_name === fileName);
+  assert.equal(rows.length, 2, "同名两趟不同骑行应并存");
+});
+
+test("导入决策 e2e：异名同趟（时长差 1s）→ 跳过并返回 duplicate_of", async () => {
+  const start = Date.UTC(2025, 0, 2, 10, 0, 0);
+  const upload = async (fileName, durationSec) => {
+    const resp = await fetch(`${base}/api/upload?filename=${encodeURIComponent(fileName)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: buildRideFit({ startMs: start, durationSec, power: 170, speedMS: 8 }),
+    });
+    assert.equal(resp.status, 200);
+    return resp.json();
+  };
+  const first = await upload("dup_origin.fit", 240);
+  const second = await upload("dup_copy.fit", 241);
+  assert.equal(second.uuid, first.uuid);
+  assert.equal(second.duplicate_of?.uuid, first.uuid);
+  assert.equal(second.duplicate_of?.file_name, "dup_origin.fit");
+});
+
+test("重复检查与合并：同名不同趟插入新行后可由接口合回一条", async () => {
+  const summary = (date) => ({
+    activity: { date, sport: "cycling", duration_sec: 2400, distance_km: 20 },
+    power: { normalized_power: 150, intensity_factor: 0.8, tss: 40 },
+  });
+  const date = "2088-08-08";
+  const fp = rideFingerprint({ date, duration_sec: 2400, distance_km: 20 });
+  const keep = insertActivity({
+    fileName: "dup_keep.fit",
+    source: "test",
+    fingerprint: fp,
+    summary: summary(date),
+  });
+  const drop = insertActivity({
+    fileName: "dup_copy.fit",
+    source: "test",
+    fingerprint: fp,
+    summary: summary(date),
+  });
+  const reportId = saveAiReport("review", { activity_uuid: drop }, "p", "m");
+
+  const dup = await getJson("/api/duplicates");
+  assert.equal(dup.status, 200);
+  const group = dup.data.groups.find((g) => g.some((r) => r.activity_id === keep));
+  assert.ok(group, "应发现重复组");
+  assert.ok(group.some((r) => r.activity_id === drop));
+
+  const merge = await fetch(`${base}/api/activity/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep: drop, drop: keep }), // 故意传反：服务端应按最早入库纠正
+  });
+  assert.equal(merge.status, 200);
+  const merged = await merge.json();
+  assert.equal(merged.keep_uuid, keep);
+  assert.equal(resolveActivityUuid(drop), null);
+  assert.ok(getActivitySummary(keep));
+  assert.equal(getAiReport(reportId).activity_uuid, keep);
+  const dupAfter = await getJson("/api/duplicates");
+  assert.ok(!dupAfter.data.groups.some((g) => g.some((r) => r.activity_id === drop)));
+
+  // 破坏性接口守卫：无关训练不能合并（两条都保留）
+  const unrelated = insertActivity({
+    fileName: "dup_unrelated.fit",
+    source: "test",
+    fingerprint: rideFingerprint({ date: "2088-08-09", duration_sec: 2400, distance_km: 20 }),
+    summary: summary("2088-08-09"),
+  });
+  const bad = await fetch(`${base}/api/activity/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep, drop: unrelated }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /同一趟/);
+  assert.ok(resolveActivityUuid(unrelated));
+  assert.ok(resolveActivityUuid(keep));
+});
+
+test("记忆 scope/strategy 持久化与接口标注", () => {
+  const shortId = saveMemory({ content: "临时出差上下文", scope: "short" });
+  const strategyId = saveMemory({ content: "与用户商定每周三甜区", category: "strategy" });
+  const all = listAllMemories();
+  assert.equal(all.find((m) => m.id === shortId).scope, "short");
+  assert.equal(all.find((m) => m.id === shortId).expired, false);
+  assert.equal(all.find((m) => m.id === strategyId).category, "strategy");
+  deleteMemory(shortId);
+  deleteMemory(strategyId);
 });

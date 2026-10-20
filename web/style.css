@@ -504,6 +504,30 @@ select:focus, input:focus { border-color: var(--volt); }
   color: var(--faint);
 }
 
+.power-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.power-flag input { accent-color: var(--volt); }
+
+.dup-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dup-group:last-child { border-bottom: none; }
+.mem-expired { opacity: 0.55; }
+.act-name .status-badge { margin-left: 6px; }
+
 .cat-badge {
   display: inline-block;
   font-size: 10px;

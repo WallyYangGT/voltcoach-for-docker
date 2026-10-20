@@ -23,7 +23,12 @@ import {
   pedalTimeBreakdown,
   detectStationarySpans,
 } from "../index.js";
-import { estimateFtpFromHistory, evaluateFtpApply } from "../src/ftp.js";
+import {
+  estimateFtpFromHistory,
+  evaluateFtpApply,
+  isFtpCalibratedFrom,
+  selectFtpFromEstimate,
+} from "../src/ftp.js";
 import {
   compactSummaryForPrompt,
   localizeTimestamps,
@@ -517,6 +522,85 @@ test("evaluateFtpApply: 估值越采纳范围 → 拒绝", () => {
   const check = evaluateFtpApply(r, "2026-07-05", "2026-07-10");
   assert.equal(check.reason_key, "ftp.apply.range");
   assert.equal(check.reason_vars.w, 30);
+});
+
+// ---------------- FTP 区间自选 / 校准判据 / flagged 剔除（§35 回同步） ----------------
+
+test("selectFtpFromEstimate: 缺省取均值；区间内取整；越界夹逼；无估算返回 null", () => {
+  const r = estimateFtpFromHistory(threeRides(), FTP_ATHLETE);
+  assert.deepEqual(selectFtpFromEstimate(r), {
+    ftp_w: r.estimate.ftp_w,
+    requested_w: null,
+    clamped: false,
+  });
+  const inside = r.estimate.range_low + 0.4;
+  assert.deepEqual(selectFtpFromEstimate(r, inside), {
+    ftp_w: r.estimate.range_low,
+    requested_w: r.estimate.range_low,
+    clamped: false,
+  });
+  const low = selectFtpFromEstimate(r, r.estimate.range_low - 100);
+  assert.equal(low.ftp_w, r.estimate.range_low);
+  assert.equal(low.clamped, true);
+  const high = selectFtpFromEstimate(r, r.estimate.range_high + 100);
+  assert.equal(high.ftp_w, r.estimate.range_high);
+  assert.equal(high.clamped, true);
+  assert.equal(selectFtpFromEstimate({ status: "insufficient", estimate: null }), null);
+});
+
+test("isFtpCalibratedFrom: 溯源戳/非默认值/旧撤销假戳归一化", () => {
+  assert.equal(isFtpCalibratedFrom(106, null, 106), false);
+  assert.equal(isFtpCalibratedFrom(106, "", 106), false);
+  assert.equal(isFtpCalibratedFrom(150, null, 106), true);
+  assert.equal(
+    isFtpCalibratedFrom(106, "2026-10-01T00:00:00.000Z", 106, {
+      source: "manual",
+      hasAiUpdate: false,
+    }),
+    false,
+    "默认值 + manual 戳 + 无 AI 快照 = 旧撤销假戳",
+  );
+  assert.equal(
+    isFtpCalibratedFrom(106, "2026-10-01T00:00:00.000Z", 106, {
+      source: "manual",
+      hasAiUpdate: true,
+    }),
+    true,
+  );
+  assert.equal(
+    isFtpCalibratedFrom(106, "2026-10-01T00:00:00.000Z", 106, { source: "ai_coach" }),
+    true,
+  );
+});
+
+test("estimateFtpFromHistory: flagged 骑行从样本剔除并在 data_needs 披露", () => {
+  const rides = [
+    ...threeRides(),
+    { ...mkRide("flagged.fit", "2026-07-06"), power_flagged: true },
+  ];
+  const r = estimateFtpFromHistory(rides, FTP_ATHLETE);
+  assert.equal(r.sample.cycling_rides, 4);
+  assert.equal(r.sample.flagged_excluded, 1);
+  assert.equal(r.sample.usable_power_rides, 3);
+  assert.ok(r.data_needs.some((s) => s.includes("标记")));
+});
+
+test("evaluateFtpApply: chosenW 按最终写入值判 no_change / 范围闸", () => {
+  const r = baseApplyResult();
+  assert.deepEqual(
+    evaluateFtpApply(r, "2026-07-05", "2026-07-10", undefined, r.estimate.range_high),
+    { ok: true, reason_key: null },
+  );
+  assert.equal(
+    evaluateFtpApply(
+      r,
+      "2026-07-05",
+      "2026-07-10",
+      undefined,
+      r.estimate.current_ftp_w,
+    ).reason_key,
+    "ftp.apply.no_change",
+  );
 });
 
 // ---------------- 踩踏时间分解与静止段识别（0W 根治：pedal_time 进 summary + stationary 异常） ----------------

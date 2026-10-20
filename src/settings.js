@@ -9,8 +9,11 @@
  */
 
 // ============ 骑手参数出厂默认值（Web 设置页保存后以训练库为准） ============
+/** 出厂默认 FTP（判定「FTP 是否已校准」的基准；不能被 syncAthleteFromDb 的原地覆盖污染） */
+export const FACTORY_FTP_WATTS = 106;
+
 export const ATHLETE = {
-  ftp_watts: 106, // 功能阈值功率
+  ftp_watts: FACTORY_FTP_WATTS, // 功能阈值功率
   max_hr: 195, // 最大心率
   weight_kg: 60,
 };
@@ -140,6 +143,12 @@ export const PEDAL_TIME = {
 // ============ 功率峰曲线缺口容忍（index.js：fillShortGaps 插值后再算峰功率/FTP 估算） ============
 export const PEAK_CURVE = {
   max_interp_gap_sec: 10, // 允许线性插值补齐的连续缺口上限（秒）：功率计偶发掉几秒不应让 20min 峰功率整体作废；更长缺口仍视为不连续
+};
+
+// ============ 功率校准（power-calib.js：按系数缩放重算，夹逼界限） ============
+export const POWER_CALIBRATION = {
+  min_scale: 0.5, // 系数下限（低于此视为不可信，提示改用 power_flagged）
+  max_scale: 1.5, // 系数上限
 };
 
 // ============ FTP 历史估算阈值（ftp.js：窗口内功率峰曲线 + 心率交叉验证） ============

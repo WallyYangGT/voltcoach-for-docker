@@ -25,7 +25,8 @@ export async function loadReportList(container, mode = "all") {
   container.innerHTML = `<div class="table-wrap"><table class="data-table">
     <tr><th>${esc(t("ai.col.time"))}</th><th>${esc(t("ai.col.type"))}</th><th>${esc(t("ai.col.activity"))}</th><th>${esc(t("ai.col.status"))}</th><th>${esc(t("ai.col.action"))}</th></tr>
     ${rows.map((r) => {
-      const extra = r.race_date ? t("ai.race", { date: r.race_date }) : r.compare_with ? t("ai.compare", { name: esc(r.compare_with) }) : "";
+      // extra 内不转义；下方 cell 统一 esc 一次，避免 &/< 双重转义
+      const extra = r.race_date ? t("ai.race", { date: r.race_date }) : r.compare_with ? t("ai.compare", { name: r.compare_with }) : "";
       const statusBadge =
         r.status === "pending"
           ? `<span class="status-badge pending">${esc(t("ai.status.pending"))}</span>`
@@ -41,7 +42,7 @@ export async function loadReportList(container, mode = "all") {
       return `<tr>
         <td>${fmtLocalDateTime(r.created_at)}</td>
         <td>${modeLabel(r.mode)}</td>
-        <td>${esc(r.file_name ?? extra ?? "-")}</td>
+        <td>${esc(r.file_name ?? (r.activity_deleted ? t("ai.activity_deleted") : extra ?? "-"))}</td>
         <td>${statusBadge}</td>
         <td>${action}</td>
       </tr>`;
@@ -67,7 +68,7 @@ export async function renderCachedReport(id) {
     }
     body.innerHTML = `<div class="ai-result">${r.html || renderMarkdownFallback(r.markdown)}</div>`;
     state.aiThread = {
-      file_name: r.file_name,
+      activity_id: r.activity_uuid,
       report_id: r.id,
       chat_id: null,
     };
@@ -97,7 +98,7 @@ export async function runAi(payload, panel, body) {
     if (r.markdown) {
       body.innerHTML = `<div class="ai-result">${r.html || renderMarkdownFallback(r.markdown)}</div>`;
       state.aiThread = {
-        file_name: payload.file_name,
+        activity_id: payload.activity_id,
         report_id: r.id ?? null,
         chat_id: null,
       };
@@ -192,7 +193,7 @@ export function attachFollowUp(panel, body) {
           mode: "follow_up",
           chat_id: state.aiThread.chat_id ?? undefined,
           report_id: state.aiThread.report_id ?? undefined,
-          file_name: state.aiThread.file_name ?? undefined,
+          activity_id: state.aiThread.activity_id ?? undefined,
           message: q,
           lang: getLang(),
         }),
